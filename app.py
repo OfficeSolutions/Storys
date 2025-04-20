@@ -4,7 +4,7 @@ This script is optimized for permanent deployment with environment variables for
 """
 
 import os
-from google import genai
+import google.generativeai as genai
 import base64
 from PIL import Image, ImageDraw
 import io
