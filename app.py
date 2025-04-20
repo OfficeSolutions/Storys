@@ -12,9 +12,9 @@ import time
 import tempfile
 from flask import Flask, request, render_template_string, redirect, url_for, jsonify, send_file
 
-# Initialize the client with the API key from environment variable
+# Initialize the Gemini API with the API key from environment variable
 API_KEY = os.environ.get('GEMINI_API_KEY', "AIzaSyD_TRW55r7Am5mhsKiQph9RHwyfml9WOH4")
-client = genai.Client(api_key=API_KEY)
+genai.configure(api_key=API_KEY)
 
 # Create a simple Flask app for the web interface
 app = Flask(__name__)
@@ -57,8 +57,8 @@ def generate_story(child_name, image_data, theme="adventure"):
         """
         
         # Generate the story using Gemini API
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        response = model.generate_content(
             contents=[
                 {"role": "user", "parts": [
                     {"text": story_prompt},
