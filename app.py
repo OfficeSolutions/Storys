@@ -11,6 +11,7 @@ import io
 import time
 import tempfile
 from flask import Flask, request, render_template_string, redirect, url_for, jsonify, send_file
+from io import BytesIO
 
 # Initialize the Gemini API with the API key from environment variable
 API_KEY = os.environ.get('GEMINI_API_KEY')
@@ -19,8 +20,9 @@ genai.configure(api_key=API_KEY)
 # Create a simple Flask app for the web interface
 app = Flask(__name__)
 
-# Store generated stories temporarily
+# Store generated stories and illustrations temporarily
 stories = {}
+illustration_images = {}
 
 def encode_image(image_path):
     """Encode an image to base64."""
@@ -32,7 +34,57 @@ def encode_image(image_path):
         print(f"Error encoding image: {str(e)}")
         return None
 
-def generate_story(child_name, image_data, theme="adventure"):
+def extract_illustration_descriptions(story_text):
+    """Extract illustration descriptions from the story text."""
+    illustrations = []
+    parts = story_text.split('[ILLUSTRATION:')
+    for i in range(1, len(parts)):
+        end_idx = parts[i].find(']')
+        if end_idx != -1:
+            description = parts[i][:end_idx].strip()
+            illustrations.append(description)
+    return illustrations
+
+def generate_illustration_image(description, theme):
+    """Generate an illustration image based on the description using Gemini API."""
+    try:
+        # Create a prompt for the image generation
+        image_prompt = f"""
+        Create a child-friendly illustration for a bedtime story with the theme: {theme}.
+        The illustration should show: {description}
+        Style: Colorful, whimsical, appropriate for children ages 4-8.
+        Make it look like a professional children's book illustration.
+        """
+        
+        # Generate the image using Gemini API
+        model = genai.GenerativeModel("gemini-2.0-flash-exp-image-generation")
+        response = model.generate_content(
+            contents=image_prompt,
+            config=genai.types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"]
+            )
+        )
+        
+        # Extract the image from the response
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'inline_data') and part.inline_data is not None:
+                # Save the image to a temporary file
+                image_data = base64.b64decode(part.inline_data.data)
+                image = Image.open(BytesIO(image_data))
+                
+                # Create a temporary file to store the image
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                image.save(temp_file.name)
+                temp_file.close()
+                
+                return temp_file.name
+        
+        return None
+    except Exception as e:
+        print(f"Error generating illustration: {str(e)}")
+        return None
+
+def generate_story(child_name, image_data, theme="adventure", generate_illustrations=False):
     """Generate a personalized bedtime story using Gemini API."""
     if not image_data:
         return "No valid image data to analyze."
@@ -305,6 +357,13 @@ MAIN_TEMPLATE = """
             transform-origin: right;
             box-shadow: -2px 0 5px rgba(0, 0, 0, 0.2);
         }
+        
+        .illustration-image {
+            max-width: 100%;
+            border-radius: 10px;
+            margin: 15px 0;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
@@ -337,7 +396,7 @@ MAIN_TEMPLATE = """
     </nav>
 
     <div class="container">
-        {% block content %}{% endblock %}
+        {{ content|safe }}
     </div>
 
     <footer class="mt-5">
@@ -456,33 +515,32 @@ UPLOAD_TEMPLATE = """
                 <form action="/generate" method="post" enctype="multipart/form-data" id="storyForm">
                     <div class="mb-4">
                         <label for="child_name" class="form-label fw-bold">Child's Name</label>
-                        <input type="text" class="form-control form-control-lg" id="child_name" name="child_name" required placeholder="Enter your child's name">
+                        <input type="text" class="form-control" id="child_name" name="child_name" placeholder="Enter your child's name" required>
                     </div>
-                    
-                    <div class="mb-4">
-                        <label for="child_image" class="form-label fw-bold">Upload a Photo</label>
-                        <input type="file" class="form-control form-control-lg" id="child_image" name="child_image" accept="image/*">
-                        <div class="form-text">Upload a clear photo of your child's face for the best results.</div>
-                    </div>
-                    
                     <div class="mb-4">
                         <label for="theme" class="form-label fw-bold">Story Theme</label>
-                        <select class="form-select form-select-lg" id="theme" name="theme">
+                        <select class="form-select" id="theme" name="theme">
                             <option value="adventure">Adventure</option>
                             <option value="fantasy">Fantasy</option>
                             <option value="space">Space Exploration</option>
                             <option value="underwater">Underwater Journey</option>
-                            <option value="magical forest">Magical Forest</option>
-                            <option value="dinosaur">Dinosaur Discovery</option>
-                            <option value="superhero">Superhero Mission</option>
+                            <option value="fairy tale">Fairy Tale</option>
+                            <option value="jungle">Jungle Expedition</option>
                         </select>
                     </div>
-                    
+                    <div class="mb-4">
+                        <label for="child_image" class="form-label fw-bold">Child's Photo</label>
+                        <input type="file" class="form-control" id="child_image" name="child_image" accept="image/*">
+                        <div class="form-text">Upload a clear photo of your child for the best personalization.</div>
+                    </div>
+                    <div class="mb-4 form-check">
+                        <input type="checkbox" class="form-check-input" id="generate_illustrations" name="generate_illustrations" value="true">
+                        <label class="form-check-label" for="generate_illustrations">Generate illustrations for the story</label>
+                        <div class="form-text">When checked, AI will create illustrations for the story instead of just text descriptions.</div>
+                    </div>
                     <div class="d-grid gap-2">
-                        <button type="submit" class="btn btn-primary btn-lg" id="generateBtn">
-                            <i class="bi bi-magic me-2"></i> Generate Story
-                        </button>
-                        <a href="/generate-sample" class="btn btn-outline-primary">Try with a sample image</a>
+                        <button type="submit" class="btn btn-primary btn-lg">Generate Story</button>
+                        <a href="/generate-sample" class="btn btn-outline-secondary">Try with a sample image</a>
                     </div>
                 </form>
             </div>
@@ -491,13 +549,10 @@ UPLOAD_TEMPLATE = """
 </div>
 
 <div class="row mt-5">
-    <div class="col-12 text-center">
-        <h2 class="fw-bold mb-4">Why Choose Storybook Magic?</h2>
-    </div>
     <div class="col-md-4 mb-4">
         <div class="card h-100">
             <div class="card-body text-center p-4">
-                <i class="bi bi-stars text-primary fs-1 mb-3"></i>
+                <i class="bi bi-magic text-primary fs-1 mb-3"></i>
                 <h4>Unique Stories</h4>
                 <p>Every story is completely unique and personalized to your child, making bedtime reading extra special.</p>
             </div>
@@ -829,123 +884,49 @@ STORY_TEMPLATE = """
     // Function to prepare book data for Blurb API
     function prepareBookData(storyHtml, childName, theme) {
         // In a real implementation, this would format the story and illustrations
-        // according to Blurb's specifications
-        const bookData = {
+        // for the Blurb book printing API
+        return {
             title: `${childName}'s ${theme} Adventure`,
             author: 'Storybook Magic',
-            size: '8x8',
-            format: document.querySelector('input[name="bookFormat"]:checked').value,
-            pages: []
+            pages: storyHtml,
+            format: 'square',
+            cover: 'hardcover'
         };
-        
-        // Extract story text and illustration descriptions
-        const storyContent = document.querySelector('.story').innerHTML;
-        const paragraphs = storyContent.split('<div class="illustration">');
-        
-        // Add dedication page
-        bookData.pages.push({
-            type: 'dedication',
-            content: document.getElementById('dedicationText').value || `For ${childName}, with love`
-        });
-        
-        // Add title page
-        bookData.pages.push({
-            type: 'title',
-            title: bookData.title,
-            author: bookData.author
-        });
-        
-        // Process story content and illustrations
-        let currentPage = {
-            type: 'content',
-            text: '',
-            illustration: null
-        };
-        
-        paragraphs.forEach(paragraph => {
-            if (paragraph.includes('[ILLUSTRATION:')) {
-                // This is an illustration description
-                const illustrationDesc = paragraph.split('[ILLUSTRATION:')[1].split(']')[0].trim();
-                
-                // If we have text in the current page, save it and start a new page
-                if (currentPage.text) {
-                    bookData.pages.push(currentPage);
-                    currentPage = {
-                        type: 'content',
-                        text: '',
-                        illustration: null
-                    };
-                }
-                
-                // Add illustration page
-                bookData.pages.push({
-                    type: 'illustration',
-                    description: illustrationDesc
-                });
-            } else {
-                // This is regular text content
-                currentPage.text += paragraph;
-                
-                // If text is getting long, create a new page
-                if (currentPage.text.length > 500) {
-                    bookData.pages.push(currentPage);
-                    currentPage = {
-                        type: 'content',
-                        text: '',
-                        illustration: null
-                    };
-                }
-            }
-        });
-        
-        // Add any remaining content
-        if (currentPage.text) {
-            bookData.pages.push(currentPage);
-        }
-        
-        return bookData;
     }
 </script>
 {% endblock %}
 """
 
 @app.route('/')
-def index():
-    """Render the upload page."""
-    # Fixed: Use a combined template instead of extending from base.html
-    combined_template = MAIN_TEMPLATE.replace('{% block content %}{% endblock %}', UPLOAD_TEMPLATE)
-    combined_template = combined_template.replace('{% block extra_js %}{% endblock %}', 
-                                                 UPLOAD_TEMPLATE.split('{% block extra_js %}')[1].split('{% endblock %}')[0])
-    combined_template = combined_template.replace('{% block extra_css %}{% endblock %}', '')
-    combined_template = combined_template.replace('{% if page_title %}{{ page_title }}{% else %}Storybook Magic{% endif %}', 
-                                                 'Create Your Personalized Bedtime Story | Storybook Magic')
-    
-    return render_template_string(combined_template)
+def home():
+    """Render the home page."""
+    # Use a simpler approach to render templates
+    template = render_template_string(UPLOAD_TEMPLATE, page_title="Create Your Story | Storybook Magic")
+    return render_template_string(MAIN_TEMPLATE, content=template)
 
 @app.route('/generate', methods=['POST'])
 def generate():
-    """Generate a story based on the uploaded image and child's name."""
-    child_name = request.form.get('child_name', 'Child')
+    """Generate a personalized story based on the uploaded image."""
+    child_name = request.form.get('child_name', '')
     theme = request.form.get('theme', 'adventure')
+    generate_illustrations = request.form.get('generate_illustrations') == 'true'
     
     # Check if an image was uploaded
-    if 'child_image' not in request.files:
+    if 'child_image' not in request.files or request.files['child_image'].filename == '':
         return "No image uploaded", 400
     
-    file = request.files['child_image']
+    # Save the uploaded image to a temporary file
+    image_file = request.files['child_image']
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+    image_file.save(temp_file.name)
+    temp_file.close()
+    temp_path = temp_file.name
     
-    # If no file was selected
-    if file.filename == '':
-        return "No image selected", 400
-    
-    # Save the uploaded file temporarily
-    temp_dir = tempfile.mkdtemp()
-    temp_path = os.path.join(temp_dir, "uploaded_image.jpg")
-    file.save(temp_path)
-    
-    # Process the image and generate a story
+    # Encode the image to base64
     image_data = encode_image(temp_path)
-    story = generate_story(child_name, image_data, theme)
+    
+    # Generate the story
+    story = generate_story(child_name, image_data, theme, generate_illustrations)
     
     # Store the story and image path
     story_id = str(int(time.time()))
@@ -953,8 +934,24 @@ def generate():
         'story': story,
         'image_path': temp_path,
         'child_name': child_name,
-        'theme': theme
+        'theme': theme,
+        'generate_illustrations': generate_illustrations
     }
+    
+    # Generate illustrations if requested
+    if generate_illustrations:
+        # Extract illustration descriptions from the story
+        descriptions = extract_illustration_descriptions(story)
+        
+        # Generate images for each description
+        illustration_images[story_id] = []
+        for desc in descriptions:
+            image_path = generate_illustration_image(desc, theme)
+            if image_path:
+                illustration_images[story_id].append({
+                    'description': desc,
+                    'image_path': image_path
+                })
     
     return redirect(url_for('view_story', story_id=story_id))
 
@@ -977,7 +974,8 @@ def generate_sample():
         'story': story,
         'image_path': sample_image_path,
         'child_name': "Alex",
-        'theme': "adventure"
+        'theme': "adventure",
+        'generate_illustrations': False
     }
     
     return redirect(url_for('view_story', story_id=story_id))
@@ -989,43 +987,59 @@ def view_story(story_id):
         return "Story not found", 404
     
     story_data = stories[story_id]
+    generate_illustrations = story_data.get('generate_illustrations', False)
     
-    # Process the story to highlight illustration descriptions
-    story_html = story_data['story'].replace('[ILLUSTRATION:', '<div class="illustration"><i class="bi bi-image me-2"></i>[ILLUSTRATION:')
-    story_html = story_html.replace(']', ']</div>')
+    # Process the story to highlight illustration descriptions or replace with actual images
+    story_html = story_data['story']
     
-    # Fixed: Use a combined template instead of extending from base.html
-    combined_template = MAIN_TEMPLATE.replace('{% block content %}{% endblock %}', STORY_TEMPLATE)
-    combined_template = combined_template.replace('{% block extra_js %}{% endblock %}', 
-                                                 STORY_TEMPLATE.split('{% block extra_js %}')[1].split('{% endblock %}')[0])
-    combined_template = combined_template.replace('{% block extra_css %}{% endblock %}', '')
-    combined_template = combined_template.replace('{% if page_title %}{{ page_title }}{% else %}Storybook Magic{% endif %}', 
-                                                 f"Your Personalized Bedtime Story | Storybook Magic")
+    if generate_illustrations and story_id in illustration_images:
+        # Replace illustration descriptions with actual images
+        for illustration in illustration_images[story_id]:
+            desc = illustration['description']
+            img_path = illustration['image_path']
+            img_url = f"/illustration/{story_id}/{desc}"
+            img_tag = f'<div class="illustration"><img src="{img_url}" alt="{desc}" class="illustration-image"><p><i class="bi bi-image me-2"></i>{desc}</p></div>'
+            story_html = story_html.replace(f'[ILLUSTRATION: {desc}]', img_tag)
+    else:
+        # Just highlight the illustration descriptions
+        story_html = story_html.replace('[ILLUSTRATION:', '<div class="illustration"><i class="bi bi-image me-2"></i>[ILLUSTRATION:')
+        story_html = story_html.replace(']', ']</div>')
     
-    # Replace variables in the template
-    template_with_vars = combined_template.replace('{{ story_html|safe }}', story_html)
-    template_with_vars = template_with_vars.replace('{{ image_path }}', f"/image/{story_id}")
-    template_with_vars = template_with_vars.replace('{{ child_name }}', story_data['child_name'])
-    template_with_vars = template_with_vars.replace('{{ theme }}', story_data['theme'])
+    # Replace paragraphs with proper HTML
+    story_html = story_html.replace('\n\n', '</p><p>')
+    story_html = f'<p>{story_html}</p>'
     
-    return render_template_string(template_with_vars)
+    # Use a simpler approach to render templates
+    template = render_template_string(
+        STORY_TEMPLATE,
+        story_html=story_html,
+        image_path=f"/image/{story_id}",
+        child_name=story_data['child_name'],
+        theme=story_data['theme'],
+        page_title=f"{story_data['child_name']}'s Story | Storybook Magic"
+    )
+    
+    return render_template_string(MAIN_TEMPLATE, content=template)
 
 @app.route('/image/<story_id>')
 def get_image(story_id):
     """Serve the image associated with a story."""
     if story_id not in stories:
-        return "Image not found", 404
+        return "Story not found", 404
     
-    image_path = stories[story_id]['image_path']
-    
-    # Read the image and return it
-    return send_file(image_path, mimetype='image/jpeg')
+    return send_file(stories[story_id]['image_path'])
 
-# For production deployment
-if __name__ == "__main__":
-    # Use environment variables for configuration in production
-    port = int(os.environ.get('PORT', 8080))
-    debug = os.environ.get('DEBUG', 'False').lower() == 'true'
+@app.route('/illustration/<story_id>/<description>')
+def get_illustration(story_id, description):
+    """Serve an illustration image."""
+    if story_id not in illustration_images:
+        return "Illustration not found", 404
     
-    print(f"Starting Storybook Magic on port {port} with debug={debug}")
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    for illustration in illustration_images[story_id]:
+        if illustration['description'] == description:
+            return send_file(illustration['image_path'])
+    
+    return "Illustration not found", 404
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
