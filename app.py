@@ -13,7 +13,7 @@ import tempfile
 from flask import Flask, request, render_template_string, redirect, url_for, jsonify, send_file
 
 # Initialize the Gemini API with the API key from environment variable
-API_KEY = os.environ.get('GEMINI_API_KEY', "AIzaSyD_TRW55r7Am5mhsKiQph9RHwyfml9WOH4")
+API_KEY = os.environ.get('GEMINI_API_KEY')
 genai.configure(api_key=API_KEY)
 
 # Create a simple Flask app for the web interface
