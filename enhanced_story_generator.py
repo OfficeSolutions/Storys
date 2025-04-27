@@ -5,13 +5,19 @@ import tempfile
 import base64
 from io import BytesIO
 from PIL import Image
+import logging
 
-def generate_story(child_name, image_data, theme, age_range="4-6", generate_illustrations=False):
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def generate_story(child_name, image_data, theme, age_range="4-6", generate_illustrations=False, rhyming=False):
     """Generate a personalized story based on the child's name, image, and theme using OpenAI."""
     try:
         # Get API key from environment variable
         api_key = os.environ.get('OPENAI_API_KEY')
         if not api_key:
+            logger.error("OPENAI_API_KEY environment variable not set")
             raise ValueError("OPENAI_API_KEY environment variable not set")
         
         # Determine story complexity based on age range
@@ -30,13 +36,18 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         
         # Analyze the image to extract details about the child
         child_description = analyze_image(image_data, api_key)
+        logger.info(f"Child description: {child_description[:100]}...")
         
         # Create a prompt for the story
+        rhyming_instruction = "The story should be written in rhyming verse, with a consistent rhythm and rhyme scheme appropriate for a bedtime story." if rhyming else ""
+        
         prompt = f"""
         Create a personalized bedtime story for a child named {child_name}. 
         The story should be in the {theme} theme and should be appropriate for {reading_level}.
         
         The story should be {complexity}
+        
+        {rhyming_instruction}
         
         Make the child the main character of the story. The child looks like this: {child_description}
         Incorporate these visual details about the child throughout the story to make it more personalized.
@@ -60,7 +71,7 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
             "messages": [
                 {
                     "role": "system",
-                    "content": f"You are a creative children's story writer specializing in stories for {reading_level}. Create engaging, age-appropriate stories that feature the child as the main character. Incorporate details from the child's appearance in the image."
+                    "content": f"You are a creative children's story writer specializing in stories for {reading_level}. Create engaging, age-appropriate stories that feature the child as the main character. Incorporate details from the child's appearance in the image. {rhyming_instruction}"
                 },
                 {
                     "role": "user",
@@ -81,6 +92,7 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
             "max_tokens": 4000
         }
         
+        logger.info(f"Sending story generation request to OpenAI API")
         # Make the API request
         response = requests.post(
             "https://api.openai.com/v1/chat/completions",
@@ -93,15 +105,16 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         if response.status_code == 200:
             response_data = response.json()
             story = response_data["choices"][0]["message"]["content"]
+            logger.info(f"Successfully generated story of length {len(story)}")
             return story
         else:
-            print(f"Error generating story: {response.status_code}")
-            print(response.text)
+            logger.error(f"Error generating story: {response.status_code}")
+            logger.error(f"Response: {response.text}")
             raise Exception(f"Error generating story: {response.status_code}")
             
     except Exception as e:
         # Fallback to a simple story if the API fails
-        print(f"Error generating story: {str(e)}")
+        logger.error(f"Error generating story: {str(e)}")
         
         # Adjust fallback story length based on age range
         if age_range == "2-4":
@@ -144,6 +157,7 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
 def analyze_image(image_data, api_key):
     """Analyze the image to extract details about the child."""
     try:
+        logger.info("Analyzing uploaded image")
         # Set up the headers for the API request
         headers = {
             "Content-Type": "application/json",
@@ -188,26 +202,26 @@ def analyze_image(image_data, api_key):
         if response.status_code == 200:
             response_data = response.json()
             description = response_data["choices"][0]["message"]["content"]
+            logger.info("Successfully analyzed image")
             return description
         else:
-            print(f"Error analyzing image: {response.status_code}")
-            print(response.text)
+            logger.error(f"Error analyzing image: {response.status_code}")
+            logger.error(f"Response: {response.text}")
             return "a young child with a bright smile"
             
     except Exception as e:
-        print(f"Error analyzing image: {str(e)}")
+        logger.error(f"Error analyzing image: {str(e)}")
         return "a young child with a bright smile"
 
-def generate_illustration(description, theme):
-    """Generate an illustration based on the description using OpenAI's gpt-image-1 model in low quality mode."""
+def generate_ghibli_style_image(image_data, api_key):
+    """Generate a Studio Ghibli style image based on the uploaded photo."""
     try:
-        # Get API key from environment variable
-        api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable not set")
+        logger.info("Generating Ghibli-style main image")
+        # Analyze the image to extract details about the child
+        child_description = analyze_image(image_data, api_key)
         
-        # Create a prompt for the illustration
-        prompt = f"A children's book illustration of {description}. Theme: {theme}. Style: colorful, whimsical, appropriate for children ages 4-8."
+        # Create a prompt for the Ghibli-style image
+        prompt = f"Create a Studio Ghibli style illustration of a child who looks like: {child_description}. The image should have the magical, whimsical quality of Ghibli films, with soft colors, detailed backgrounds, and a sense of wonder. Make it appropriate for a children's book cover."
         
         # Set up the headers for the API request
         headers = {
@@ -215,15 +229,15 @@ def generate_illustration(description, theme):
             "Authorization": f"Bearer {api_key}"
         }
         
-        # Set up the data for the API request
+        # Try with DALL-E 2 first as it might have better success rate
         data = {
-            "model": "gpt-image-1",
+            "model": "dall-e-2",
             "prompt": prompt,
             "n": 1,
-            "quality": "low",
             "size": "1024x1024"
         }
         
+        logger.info("Sending Ghibli image generation request to OpenAI API (DALL-E 2)")
         # Make the API request
         response = requests.post(
             "https://api.openai.com/v1/images/generations",
@@ -249,25 +263,28 @@ def generate_illustration(description, theme):
                     image.save(temp_file.name)
                     temp_file.close()
                     
+                    logger.info(f"Successfully generated Ghibli-style image: {temp_file.name}")
                     return temp_file.name
                 else:
-                    print(f"Error downloading image: {img_response.status_code}")
+                    logger.error(f"Error downloading Ghibli image: {img_response.status_code}")
             else:
-                print("No image URL found in the response")
+                logger.error("No image URL found in the response")
         else:
-            print(f"Error generating illustration: {response.status_code}")
-            print(response.text)
+            logger.error(f"Error generating Ghibli image with DALL-E 2: {response.status_code}")
+            logger.error(f"Response: {response.text}")
             
-            # Try with DALL-E 2 as a fallback
+            # Try with gpt-image-1 as a fallback
             try:
-                # Set up the data for the API request with DALL-E 2
+                # Set up the data for the API request with gpt-image-1
                 data = {
-                    "model": "dall-e-2",
+                    "model": "gpt-image-1",
                     "prompt": prompt,
                     "n": 1,
+                    "quality": "standard",
                     "size": "1024x1024"
                 }
                 
+                logger.info("Sending Ghibli image generation request to OpenAI API (gpt-image-1)")
                 # Make the API request
                 response = requests.post(
                     "https://api.openai.com/v1/images/generations",
@@ -293,17 +310,155 @@ def generate_illustration(description, theme):
                             image.save(temp_file.name)
                             temp_file.close()
                             
+                            logger.info(f"Successfully generated Ghibli-style image with gpt-image-1: {temp_file.name}")
                             return temp_file.name
                 else:
-                    print(f"Error generating illustration with DALL-E 2: {response.status_code}")
-                    print(response.text)
+                    logger.error(f"Error generating Ghibli image with gpt-image-1: {response.status_code}")
+                    logger.error(f"Response: {response.text}")
             except Exception as e:
-                print(f"Error with DALL-E 2 fallback: {str(e)}")
-            
+                logger.error(f"Error with gpt-image-1 fallback: {str(e)}")
+        
+        # If all attempts fail, return None
+        logger.error("All attempts to generate Ghibli-style image failed")
         return None
     except Exception as e:
-        print(f"Error generating illustration: {str(e)}")
+        logger.error(f"Error generating Ghibli-style image: {str(e)}")
         return None
+
+def generate_illustration(description, theme):
+    """Generate an illustration based on the description using OpenAI's image generation models."""
+    try:
+        # Get API key from environment variable
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            logger.error("OPENAI_API_KEY environment variable not set")
+            raise ValueError("OPENAI_API_KEY environment variable not set")
+        
+        # Create a prompt for the illustration
+        prompt = f"A children's book illustration of {description}. Theme: {theme}. Style: colorful, whimsical, appropriate for children ages 4-8."
+        
+        # Set up the headers for the API request
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        # Try with DALL-E 2 first as it might have better success rate
+        data = {
+            "model": "dall-e-2",
+            "prompt": prompt,
+            "n": 1,
+            "size": "1024x1024"
+        }
+        
+        logger.info(f"Generating illustration for: {description[:50]}...")
+        # Make the API request
+        response = requests.post(
+            "https://api.openai.com/v1/images/generations",
+            headers=headers,
+            data=json.dumps(data),
+            timeout=30
+        )
+        
+        # Check if the request was successful
+        if response.status_code == 200:
+            response_data = response.json()
+            
+            # Get the image URL
+            if "data" in response_data and len(response_data["data"]) > 0 and "url" in response_data["data"][0]:
+                image_url = response_data["data"][0]["url"]
+                
+                # Download the image
+                img_response = requests.get(image_url)
+                if img_response.status_code == 200:
+                    # Save the image to a temporary file
+                    image = Image.open(BytesIO(img_response.content))
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                    image.save(temp_file.name)
+                    temp_file.close()
+                    
+                    logger.info(f"Successfully generated illustration: {temp_file.name}")
+                    return temp_file.name
+                else:
+                    logger.error(f"Error downloading image: {img_response.status_code}")
+            else:
+                logger.error("No image URL found in the response")
+        else:
+            logger.error(f"Error generating illustration with DALL-E 2: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            
+            # Try with gpt-image-1 as a fallback
+            try:
+                # Set up the data for the API request with gpt-image-1
+                data = {
+                    "model": "gpt-image-1",
+                    "prompt": prompt,
+                    "n": 1,
+                    "quality": "low",
+                    "size": "1024x1024"
+                }
+                
+                logger.info("Trying gpt-image-1 as fallback")
+                # Make the API request
+                response = requests.post(
+                    "https://api.openai.com/v1/images/generations",
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=30
+                )
+                
+                # Check if the request was successful
+                if response.status_code == 200:
+                    response_data = response.json()
+                    
+                    # Get the image URL
+                    if "data" in response_data and len(response_data["data"]) > 0 and "url" in response_data["data"][0]:
+                        image_url = response_data["data"][0]["url"]
+                        
+                        # Download the image
+                        img_response = requests.get(image_url)
+                        if img_response.status_code == 200:
+                            # Save the image to a temporary file
+                            image = Image.open(BytesIO(img_response.content))
+                            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                            image.save(temp_file.name)
+                            temp_file.close()
+                            
+                            logger.info(f"Successfully generated illustration with gpt-image-1: {temp_file.name}")
+                            return temp_file.name
+                else:
+                    logger.error(f"Error generating illustration with gpt-image-1: {response.status_code}")
+                    logger.error(f"Response: {response.text}")
+            except Exception as e:
+                logger.error(f"Error with gpt-image-1 fallback: {str(e)}")
+        
+        # If all attempts fail, create a placeholder image with the description
+        logger.warning("Creating placeholder image with description text")
+        placeholder_path = os.path.join(tempfile.gettempdir(), f'placeholder_{hash(description)}.jpg')
+        img = Image.new('RGB', (800, 600), color=(240, 240, 240))
+        from PIL import ImageDraw, ImageFont
+        d = ImageDraw.Draw(img)
+        
+        # Wrap text to fit in the image
+        import textwrap
+        wrapped_text = textwrap.fill(f"Illustration: {description}", width=40)
+        
+        # Draw the text
+        d.text((50, 50), wrapped_text, fill=(0, 0, 0))
+        img.save(placeholder_path)
+        
+        return placeholder_path
+    except Exception as e:
+        logger.error(f"Error generating illustration: {str(e)}")
+        # Create a simple error placeholder
+        placeholder_path = os.path.join(tempfile.gettempdir(), f'error_placeholder_{hash(description)}.jpg')
+        img = Image.new('RGB', (800, 600), color=(255, 200, 200))
+        from PIL import ImageDraw
+        d = ImageDraw.Draw(img)
+        d.text((50, 50), f"Error generating illustration: {str(e)[:100]}", fill=(0, 0, 0))
+        img.save(placeholder_path)
+        
+        return placeholder_path
 
 def extract_illustration_descriptions(story):
     """Extract illustration descriptions from the story."""
@@ -313,4 +468,5 @@ def extract_illustration_descriptions(story):
     pattern = r'\[ILLUSTRATION: (.*?)\]'
     matches = re.findall(pattern, story)
     
+    logger.info(f"Extracted {len(matches)} illustration descriptions from story")
     return matches

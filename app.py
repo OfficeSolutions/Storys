@@ -4,9 +4,19 @@ import time
 import base64
 import uuid
 import urllib.parse
+import logging
 from flask import Flask, render_template_string, request, redirect, url_for, send_file, abort
 from werkzeug.utils import secure_filename
-from enhanced_story_generator import generate_story, generate_illustration, extract_illustration_descriptions
+from debug_enhanced_story_generator import (
+    generate_story, 
+    generate_illustration, 
+    extract_illustration_descriptions,
+    generate_ghibli_style_image
+)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
@@ -407,6 +417,10 @@ UPLOAD_TEMPLATE = """
             <input type="checkbox" class="form-check-input" id="generate_illustrations" name="generate_illustrations" value="true" checked>
             <label class="form-check-label" for="generate_illustrations">Generate illustrations for the story</label>
         </div>
+        <div class="mb-3 form-check">
+            <input type="checkbox" class="form-check-input" id="rhyming" name="rhyming" value="true">
+            <label class="form-check-label" for="rhyming">Create a rhyming bedtime story</label>
+        </div>
         <div class="text-center">
             <button type="submit" class="btn btn-primary btn-lg px-4">Create Story</button>
         </div>
@@ -471,6 +485,9 @@ STORY_TEMPLATE = """
                 <span class="badge bg-primary">{{ theme|title }}</span>
                 <span class="badge bg-secondary">Age: {{ age_range }}</span>
                 <span class="badge bg-info">AI-Generated</span>
+                {% if rhyming %}
+                <span class="badge bg-success">Rhyming</span>
+                {% endif %}
             </div>
         </div>
         <div class="col-md-4 text-end">
@@ -573,138 +590,193 @@ def home():
 @app.route('/generate', methods=['POST'])
 def generate():
     """Generate a personalized story based on the uploaded image."""
-    child_name = request.form.get('child_name', '')
-    theme = request.form.get('theme', 'adventure')
-    age_range = request.form.get('age_range', '4-6')
-    generate_illustrations = request.form.get('generate_illustrations') == 'true'
-    
-    # Check if an image was uploaded
-    if 'child_image' not in request.files or request.files['child_image'].filename == '':
-        return "No image uploaded", 400
-    
-    # Save the uploaded image to a temporary file
-    image_file = request.files['child_image']
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-    image_file.save(temp_file.name)
-    temp_file.close()
-    temp_path = temp_file.name
-    
-    # Encode the image to base64
-    image_data = encode_image(temp_path)
-    
-    # Generate the story
-    story = generate_story(child_name, image_data, theme, age_range, generate_illustrations)
-    
-    # Store the story and image path
-    story_id = str(int(time.time()))
-    stories[story_id] = {
-        'story': story,
-        'image_path': temp_path,
-        'child_name': child_name,
-        'theme': theme,
-        'age_range': age_range,
-        'generate_illustrations': generate_illustrations
-    }
-    
-    # Generate illustrations if requested
-    if generate_illustrations:
-        # Extract illustration descriptions from the story
-        descriptions = extract_illustration_descriptions(story)
+    try:
+        child_name = request.form.get('child_name', '')
+        theme = request.form.get('theme', 'adventure')
+        age_range = request.form.get('age_range', '4-6')
+        generate_illustrations = request.form.get('generate_illustrations') == 'true'
+        rhyming = request.form.get('rhyming') == 'true'
         
-        # Generate images for each description
-        illustration_images[story_id] = []
-        for desc in descriptions:
-            # Generate image using OpenAI
-            image_path = generate_illustration(desc, theme)
+        logger.info(f"Generating story for {child_name}, theme: {theme}, age: {age_range}, illustrations: {generate_illustrations}, rhyming: {rhyming}")
+        
+        # Check if an image was uploaded
+        if 'child_image' not in request.files or request.files['child_image'].filename == '':
+            logger.error("No image uploaded")
+            return "No image uploaded", 400
+        
+        # Save the uploaded image to a temporary file
+        image_file = request.files['child_image']
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+        image_file.save(temp_file.name)
+        temp_file.close()
+        temp_path = temp_file.name
+        
+        # Encode the image to base64
+        image_data = encode_image(temp_path)
+        
+        # Get API key from environment variable
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            logger.error("OPENAI_API_KEY environment variable not set")
+            return "API key not configured", 500
+        
+        # Generate a Ghibli-style main image
+        ghibli_image_path = generate_ghibli_style_image(image_data, api_key)
+        if not ghibli_image_path:
+            logger.warning("Failed to generate Ghibli-style image, using original image")
+            ghibli_image_path = temp_path
+        
+        # Generate the story
+        story = generate_story(child_name, image_data, theme, age_range, generate_illustrations, rhyming)
+        
+        # Store the story and image path
+        story_id = str(int(time.time()))
+        stories[story_id] = {
+            'story': story,
+            'image_path': ghibli_image_path,  # Use the Ghibli-style image
+            'original_image_path': temp_path,  # Keep the original image as backup
+            'child_name': child_name,
+            'theme': theme,
+            'age_range': age_range,
+            'generate_illustrations': generate_illustrations,
+            'rhyming': rhyming
+        }
+        
+        # Generate illustrations if requested
+        if generate_illustrations:
+            # Extract illustration descriptions from the story
+            descriptions = extract_illustration_descriptions(story)
             
-            if image_path:
-                # Create a unique ID for this illustration
-                illustration_id = str(uuid.uuid4())
-                illustration_images[story_id].append({
-                    'id': illustration_id,
-                    'description': desc,
-                    'image_path': image_path
-                })
-    
-    return redirect(url_for('view_story', story_id=story_id))
+            # Generate images for each description
+            illustration_images[story_id] = []
+            for desc in descriptions:
+                # Generate image using OpenAI
+                image_path = generate_illustration(desc, theme)
+                
+                if image_path:
+                    # Create a unique ID for this illustration
+                    illustration_id = str(uuid.uuid4())
+                    illustration_images[story_id].append({
+                        'id': illustration_id,
+                        'description': desc,
+                        'image_path': image_path
+                    })
+        
+        return redirect(url_for('view_story', story_id=story_id))
+    except Exception as e:
+        logger.error(f"Error in generate route: {str(e)}")
+        return f"An error occurred: {str(e)}", 500
 
 @app.route('/story/<story_id>')
 def view_story(story_id):
     """View a generated story."""
-    if story_id not in stories:
-        return "Story not found", 404
-    
-    story_data = stories[story_id]
-    generate_illustrations = story_data.get('generate_illustrations', False)
-    
-    # Process the story to highlight illustration descriptions or replace with actual images
-    story_html = story_data['story']
-    
-    if generate_illustrations and story_id in illustration_images:
-        # Replace illustration descriptions with actual images
-        for illustration in illustration_images[story_id]:
-            desc = illustration['description']
-            illustration_id = illustration['id']
-            img_url = f"/illustration/{story_id}/{illustration_id}"
-            img_tag = f'<div class="illustration"><img src="{img_url}" alt="{desc}" class="illustration-image"><p><i class="bi bi-image me-2"></i>{desc}</p></div>'
-            story_html = story_html.replace(f'[ILLUSTRATION: {desc}]', img_tag)
-    else:
-        # Just highlight the illustration descriptions
-        story_html = story_html.replace('[ILLUSTRATION:', '<div class="illustration"><i class="bi bi-image me-2"></i>[ILLUSTRATION:')
-        story_html = story_html.replace(']', ']</div>')
-    
-    # Replace paragraphs with proper HTML
-    story_html = story_html.replace('\n\n', '</p><p>')
-    story_html = f'<p>{story_html}</p>'
-    
-    # Use a simpler approach to render templates
-    template = render_template_string(
-        STORY_TEMPLATE,
-        story_html=story_html,
-        image_path=f"/image/{story_id}",
-        child_name=story_data['child_name'],
-        theme=story_data['theme'],
-        age_range=story_data['age_range'],
-        page_title=f"{story_data['child_name']}'s Story | Storybook Magic"
-    )
-    
-    return render_template_string(MAIN_TEMPLATE, content=template)
+    try:
+        if story_id not in stories:
+            logger.error(f"Story not found: {story_id}")
+            return "Story not found", 404
+        
+        story_data = stories[story_id]
+        generate_illustrations = story_data.get('generate_illustrations', False)
+        rhyming = story_data.get('rhyming', False)
+        
+        # Process the story to highlight illustration descriptions or replace with actual images
+        story_html = story_data['story']
+        
+        if generate_illustrations and story_id in illustration_images:
+            # Replace illustration descriptions with actual images
+            for illustration in illustration_images[story_id]:
+                desc = illustration['description']
+                illustration_id = illustration['id']
+                img_url = f"/illustration/{story_id}/{illustration_id}"
+                img_tag = f'<div class="illustration"><img src="{img_url}" alt="{desc}" class="illustration-image" onerror="this.src=\'/static/placeholder.jpg\'; this.alt=\'Image could not be loaded\'"><p><i class="bi bi-image me-2"></i>{desc}</p></div>'
+                story_html = story_html.replace(f'[ILLUSTRATION: {desc}]', img_tag)
+        else:
+            # Just highlight the illustration descriptions
+            story_html = story_html.replace('[ILLUSTRATION:', '<div class="illustration"><i class="bi bi-image me-2"></i>[ILLUSTRATION:')
+            story_html = story_html.replace(']', ']</div>')
+        
+        # Replace paragraphs with proper HTML
+        story_html = story_html.replace('\n\n', '</p><p>')
+        story_html = f'<p>{story_html}</p>'
+        
+        # Use a simpler approach to render templates
+        template = render_template_string(
+            STORY_TEMPLATE,
+            story_html=story_html,
+            image_path=f"/image/{story_id}",
+            child_name=story_data['child_name'],
+            theme=story_data['theme'],
+            age_range=story_data['age_range'],
+            rhyming=rhyming,
+            page_title=f"{story_data['child_name']}'s Story | Storybook Magic"
+        )
+        
+        return render_template_string(MAIN_TEMPLATE, content=template)
+    except Exception as e:
+        logger.error(f"Error in view_story route: {str(e)}")
+        return f"An error occurred: {str(e)}", 500
 
 @app.route('/image/<story_id>')
 def get_image(story_id):
     """Serve the image associated with a story."""
-    if story_id not in stories:
-        return "Story not found", 404
-    
-    return send_file(stories[story_id]['image_path'])
+    try:
+        if story_id not in stories:
+            logger.error(f"Story not found for image: {story_id}")
+            return "Story not found", 404
+        
+        # Use the Ghibli-style image if available, otherwise fall back to original
+        image_path = stories[story_id]['image_path']
+        if not os.path.exists(image_path):
+            logger.warning(f"Image not found at {image_path}, using original")
+            image_path = stories[story_id]['original_image_path']
+            
+        return send_file(image_path)
+    except Exception as e:
+        logger.error(f"Error in get_image route: {str(e)}")
+        return "Image not available", 404
 
 @app.route('/illustration/<story_id>/<illustration_id>')
 def get_illustration(story_id, illustration_id):
     """Serve an illustration image using a unique ID instead of description."""
-    if story_id not in illustration_images:
+    try:
+        if story_id not in illustration_images:
+            logger.error(f"Illustrations not found for story: {story_id}")
+            return "Illustration not found", 404
+        
+        for illustration in illustration_images[story_id]:
+            if illustration['id'] == illustration_id:
+                image_path = illustration['image_path']
+                if os.path.exists(image_path):
+                    return send_file(image_path)
+                else:
+                    logger.error(f"Illustration file not found: {image_path}")
+                    return "Illustration file not found", 404
+        
+        logger.error(f"Illustration ID not found: {illustration_id}")
         return "Illustration not found", 404
-    
-    for illustration in illustration_images[story_id]:
-        if illustration['id'] == illustration_id:
-            return send_file(illustration['image_path'])
-    
-    return "Illustration not found", 404
+    except Exception as e:
+        logger.error(f"Error in get_illustration route: {str(e)}")
+        return "Illustration not available", 404
 
 # Create a static directory for placeholder images
 @app.route('/static/<filename>')
 def static_files(filename):
     """Serve static files."""
-    if filename == 'placeholder.jpg':
-        # Return a simple placeholder image
-        placeholder_path = os.path.join(tempfile.gettempdir(), 'placeholder.jpg')
-        if not os.path.exists(placeholder_path):
-            from PIL import Image, ImageDraw, ImageFont
-            img = Image.new('RGB', (400, 300), color=(200, 200, 200))
-            d = ImageDraw.Draw(img)
-            d.text((150, 150), "Image not available", fill=(0, 0, 0))
-            img.save(placeholder_path)
-        return send_file(placeholder_path)
-    return "File not found", 404
+    try:
+        if filename == 'placeholder.jpg':
+            # Return a simple placeholder image
+            placeholder_path = os.path.join(tempfile.gettempdir(), 'placeholder.jpg')
+            if not os.path.exists(placeholder_path):
+                from PIL import Image, ImageDraw, ImageFont
+                img = Image.new('RGB', (400, 300), color=(200, 200, 200))
+                d = ImageDraw.Draw(img)
+                d.text((150, 150), "Image not available", fill=(0, 0, 0))
+                img.save(placeholder_path)
+            return send_file(placeholder_path)
+        return "File not found", 404
+    except Exception as e:
+        logger.error(f"Error in static_files route: {str(e)}")
+        return "File not available", 404
 
 if __name__ == '__main__':
     # Use the PORT environment variable provided by Render
