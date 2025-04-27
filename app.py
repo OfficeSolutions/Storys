@@ -5,7 +5,7 @@ import base64
 import uuid
 from flask import Flask, render_template_string, request, redirect, url_for, send_file, abort
 from werkzeug.utils import secure_filename
-from illustration_generator import generate_illustration_image
+from openai_story_generator import generate_story, generate_illustration, extract_illustration_descriptions
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
@@ -14,77 +14,10 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
 stories = {}
 illustration_images = {}
 
-# Get API keys from environment variables
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-
 def encode_image(image_path):
     """Encode an image to base64."""
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
-
-def generate_story(child_name, image_data, theme, generate_illustrations=False):
-    """Generate a personalized story based on the child's name, image, and theme."""
-    try:
-        import google.generativeai as genai
-        
-        # Configure the Gemini API
-        genai.configure(api_key=GEMINI_API_KEY)
-        
-        # Create a prompt for the story
-        prompt = f"""
-        Create a personalized bedtime story for a child named {child_name}. 
-        The story should be in the {theme} theme and should be appropriate for a young child.
-        The story should be about 500-800 words long and should be divided into paragraphs.
-        
-        If the child appears in the uploaded image, incorporate their appearance into the story.
-        
-        Make the child the main character of the story.
-        
-        The story should have a clear beginning, middle, and end, with a positive message or lesson.
-        
-        {"Include 3-5 places in the story where illustrations would be appropriate. Mark these with [ILLUSTRATION: brief description of the illustration]." if generate_illustrations else ""}
-        """
-        
-        # Generate the story using Gemini API
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_data}])
-        
-        return response.text
-    except Exception as e:
-        # Fallback to a simple story if the API fails
-        print(f"Error generating story: {str(e)}")
-        return f"""
-        # {child_name}'s {theme.title()} Adventure
-
-        Once upon a time, there was a child named {child_name} who loved {theme} adventures.
-        
-        One day, {child_name} discovered a magical door that led to a world of {theme}.
-        
-        {"[ILLUSTRATION: A child standing in front of a magical glowing door]" if generate_illustrations else ""}
-        
-        In this world, {child_name} met friendly creatures who became their guides.
-        
-        {"[ILLUSTRATION: The child meeting magical creatures in a fantastical landscape]" if generate_illustrations else ""}
-        
-        After many exciting adventures, {child_name} learned the importance of courage and friendship.
-        
-        {"[ILLUSTRATION: The child waving goodbye to their new friends as they return home]" if generate_illustrations else ""}
-        
-        When {child_name} returned home, they couldn't wait to share their amazing story with everyone.
-        
-        The End.
-        """
-
-def extract_illustration_descriptions(story):
-    """Extract illustration descriptions from the story."""
-    import re
-    
-    # Find all illustration descriptions in the story
-    pattern = r'\[ILLUSTRATION: (.*?)\]'
-    matches = re.findall(pattern, story)
-    
-    return matches
 
 # HTML template for the main layout
 MAIN_TEMPLATE = """
@@ -98,42 +31,51 @@ MAIN_TEMPLATE = """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <style>
         :root {
-            --primary-color: #6a11cb;
-            --secondary-color: #2575fc;
-            --accent-color: #ff7eb3;
-            --light-color: #f8f9fa;
-            --dark-color: #343a40;
+            --primary-color: #3a86ff;
+            --secondary-color: #8338ec;
+            --accent-color: #ff006e;
+            --light-color: #ffffff;
+            --dark-color: #212529;
+            --background-color: #f8f9fa;
         }
         
         body {
             font-family: 'Nunito', sans-serif;
-            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
-            min-height: 100vh;
-            color: var(--light-color);
+            background-color: var(--background-color);
+            color: var(--dark-color);
+            line-height: 1.6;
         }
         
         .navbar {
-            background-color: rgba(0, 0, 0, 0.2);
-            backdrop-filter: blur(10px);
+            background-color: var(--light-color);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .navbar-brand {
+            font-weight: bold;
+            color: var(--primary-color) !important;
         }
         
         .hero-section {
-            padding: 5rem 0;
-            background: rgba(0, 0, 0, 0.1);
-            border-radius: 1rem;
+            padding: 4rem 0;
+            background-color: var(--light-color);
+            border-radius: 0.5rem;
             margin: 2rem 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
         }
         
         .card {
-            border-radius: 1rem;
+            border: none;
+            border-radius: 0.5rem;
             overflow: hidden;
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-            transition: transform 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
             height: 100%;
         }
         
         .card:hover {
             transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
         }
         
         .card-img-top {
@@ -142,54 +84,67 @@ MAIN_TEMPLATE = """
         }
         
         .form-container {
-            background-color: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 1rem;
+            background-color: var(--light-color);
+            border-radius: 0.5rem;
             padding: 2rem;
             margin: 2rem 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
         }
         
         .btn-primary {
-            background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+            background-color: var(--primary-color);
             border: none;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
         
-        .btn-light {
-            background-color: var(--light-color);
+        .btn-primary:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+        }
+        
+        .btn-outline-primary {
             color: var(--primary-color);
-            font-weight: bold;
+            border-color: var(--primary-color);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .btn-outline-primary:hover {
+            background-color: var(--primary-color);
+            color: var(--light-color);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
         }
         
         footer {
-            background-color: rgba(0, 0, 0, 0.2);
-            backdrop-filter: blur(10px);
+            background-color: var(--light-color);
             padding: 2rem 0;
             margin-top: 3rem;
+            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
         }
         
         .story-container {
-            background-color: white;
-            color: var(--dark-color);
-            border-radius: 1rem;
+            background-color: var(--light-color);
+            border-radius: 0.5rem;
             padding: 2rem;
             margin: 2rem 0;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
         }
         
         .child-image {
-            border-radius: 1rem;
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             max-width: 100%;
             height: auto;
         }
         
         .illustration {
-            background-color: #f8f9fa;
+            background-color: var(--background-color);
             border-radius: 0.5rem;
             padding: 1rem;
             margin: 1.5rem 0;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
         }
         
         .illustration-image {
@@ -198,15 +153,122 @@ MAIN_TEMPLATE = """
             margin-bottom: 0.5rem;
         }
         
+        /* 3D Book Styles */
+        .book-container {
+            perspective: 1000px;
+            width: 100%;
+            height: 500px;
+            margin: 2rem auto;
+            position: relative;
+        }
+        
+        .book {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            transform-style: preserve-3d;
+            transform: rotateY(-30deg);
+            transition: transform 1s ease;
+        }
+        
+        .book:hover {
+            transform: rotateY(0deg);
+        }
+        
+        .book-front, .book-back, .book-spine, .book-top, .book-bottom, .book-right {
+            position: absolute;
+            background-color: var(--light-color);
+            border-radius: 2px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .book-front, .book-back {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .book-front {
+            transform: translateZ(20px);
+            background-color: var(--primary-color);
+            color: var(--light-color);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            border-radius: 5px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .book-back {
+            transform: translateZ(-20px) rotateY(180deg);
+            background-color: var(--secondary-color);
+            border-radius: 5px;
+        }
+        
+        .book-spine {
+            width: 40px;
+            height: 100%;
+            transform: rotateY(90deg) translateZ(-20px);
+            background-color: var(--accent-color);
+        }
+        
+        .book-top {
+            width: 100%;
+            height: 40px;
+            transform: rotateX(90deg) translateZ(-20px);
+            background-color: var(--light-color);
+        }
+        
+        .book-bottom {
+            width: 100%;
+            height: 40px;
+            transform: rotateX(-90deg) translateZ(460px);
+            background-color: var(--light-color);
+        }
+        
+        .book-right {
+            width: 40px;
+            height: 100%;
+            transform: rotateY(-90deg) translateZ(calc(100% - 20px));
+            background-color: var(--background-color);
+        }
+        
+        .book-content {
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        
+        .book-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .book-author {
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+        
         @media (max-width: 768px) {
             .hero-section {
                 padding: 3rem 0;
+            }
+            
+            .book-container {
+                height: 400px;
+            }
+            
+            .book-bottom {
+                transform: rotateX(-90deg) translateZ(360px);
             }
         }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark">
+    <nav class="navbar navbar-expand-lg navbar-light">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="/">
                 <i class="bi bi-book me-2 fs-3"></i>
@@ -223,12 +285,6 @@ MAIN_TEMPLATE = """
                     <li class="nav-item">
                         <a class="nav-link" href="#">How It Works</a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="#">Examples</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="#">Contact</a>
-                    </li>
                 </ul>
             </div>
         </div>
@@ -241,32 +297,13 @@ MAIN_TEMPLATE = """
     <footer class="mt-5">
         <div class="container">
             <div class="row">
-                <div class="col-md-4">
+                <div class="col-md-6">
                     <h5>Storybook Magic</h5>
                     <p>Creating personalized bedtime stories for children using the power of AI.</p>
                 </div>
-                <div class="col-md-4">
-                    <h5>Quick Links</h5>
-                    <ul class="list-unstyled">
-                        <li><a href="#" class="text-white">Home</a></li>
-                        <li><a href="#" class="text-white">How It Works</a></li>
-                        <li><a href="#" class="text-white">Examples</a></li>
-                        <li><a href="#" class="text-white">Contact</a></li>
-                    </ul>
+                <div class="col-md-6 text-md-end">
+                    <p class="mb-0">© 2025 Storybook Magic. All rights reserved.</p>
                 </div>
-                <div class="col-md-4">
-                    <h5>Connect With Us</h5>
-                    <div class="d-flex gap-3 fs-4">
-                        <a href="#" class="text-white"><i class="bi bi-facebook"></i></a>
-                        <a href="#" class="text-white"><i class="bi bi-twitter"></i></a>
-                        <a href="#" class="text-white"><i class="bi bi-instagram"></i></a>
-                        <a href="#" class="text-white"><i class="bi bi-linkedin"></i></a>
-                    </div>
-                </div>
-            </div>
-            <hr class="my-4 bg-light">
-            <div class="text-center">
-                <p class="mb-0">© 2025 Storybook Magic. All rights reserved.</p>
             </div>
         </div>
     </footer>
@@ -283,7 +320,7 @@ UPLOAD_TEMPLATE = """
     <div class="container">
         <h1 class="display-4 fw-bold mb-3">Create Magical Bedtime Stories</h1>
         <p class="lead mb-4">Upload a photo of your child and we'll create a personalized bedtime story featuring them as the main character!</p>
-        <a href="#create-story" class="btn btn-light btn-lg px-4 me-md-2">Get Started</a>
+        <a href="#create-story" class="btn btn-primary btn-lg px-4">Get Started</a>
     </div>
 </div>
 
@@ -327,7 +364,7 @@ UPLOAD_TEMPLATE = """
         <div class="mb-3">
             <label for="child_image" class="form-label">Upload a Photo</label>
             <input type="file" class="form-control" id="child_image" name="child_image" accept="image/*" required>
-            <div class="form-text text-light">We'll use this photo to personalize the story.</div>
+            <div class="form-text">We'll use this photo to personalize the story.</div>
         </div>
         <div class="mb-3">
             <label for="theme" class="form-label">Story Theme</label>
@@ -397,7 +434,7 @@ UPLOAD_TEMPLATE = """
 {% endblock %}
 """
 
-# HTML template for the story page
+# HTML template for the story page with 3D book
 STORY_TEMPLATE = """
 {% block content %}
 <div class="story-container">
@@ -424,6 +461,22 @@ STORY_TEMPLATE = """
             </div>
         </div>
         <div class="col-md-8">
+            <!-- 3D Book Preview -->
+            <div class="book-container">
+                <div class="book">
+                    <div class="book-front">
+                        <div class="book-title">{{ child_name }}'s {{ theme|title }} Adventure</div>
+                        <div class="book-author">A Personalized Story</div>
+                        <img src="{{ image_path }}" alt="{{ child_name }}" style="max-width: 150px; border-radius: 5px; margin: 20px 0;">
+                    </div>
+                    <div class="book-back"></div>
+                    <div class="book-spine"></div>
+                    <div class="book-top"></div>
+                    <div class="book-bottom"></div>
+                    <div class="book-right"></div>
+                </div>
+            </div>
+            
             <div class="story-content">
                 {{ story_html|safe }}
             </div>
@@ -447,6 +500,27 @@ STORY_TEMPLATE = """
         shareBtn.addEventListener('click', function(e) {
             e.preventDefault();
             alert('Sharing functionality coming soon!');
+        });
+        
+        // 3D Book animation
+        const book = document.querySelector('.book');
+        let rotationY = -30;
+        let rotationX = 0;
+        
+        // Automatic gentle rotation
+        setInterval(() => {
+            rotationY = -30 + Math.sin(Date.now() / 2000) * 10;
+            rotationX = Math.sin(Date.now() / 3000) * 5;
+            book.style.transform = `rotateY(${rotationY}deg) rotateX(${rotationX}deg)`;
+        }, 50);
+        
+        // Reset rotation on hover
+        book.addEventListener('mouseenter', function() {
+            book.style.transform = 'rotateY(0deg) rotateX(0deg)';
+        });
+        
+        book.addEventListener('mouseleave', function() {
+            // Resume automatic rotation
         });
     });
 </script>
@@ -502,13 +576,8 @@ def generate():
         # Generate images for each description
         illustration_images[story_id] = []
         for desc in descriptions:
-            # Try to generate image using both APIs with fallback
-            image_path = generate_illustration_image(
-                desc, 
-                theme, 
-                openai_api_key=OPENAI_API_KEY, 
-                gemini_api_key=GEMINI_API_KEY
-            )
+            # Generate image using OpenAI
+            image_path = generate_illustration(desc, theme)
             
             if image_path:
                 illustration_images[story_id].append({
@@ -580,4 +649,6 @@ def get_illustration(story_id, description):
     return "Illustration not found", 404
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    # Use the PORT environment variable provided by Render
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
