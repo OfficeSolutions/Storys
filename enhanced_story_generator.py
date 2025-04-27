@@ -229,15 +229,16 @@ def generate_ghibli_style_image(image_data, api_key):
             "Authorization": f"Bearer {api_key}"
         }
         
-        # Try with DALL-E 2 first as it might have better success rate
+        # Use only gpt-image-1 as requested
         data = {
-            "model": "dall-e-2",
+            "model": "gpt-image-1",
             "prompt": prompt,
             "n": 1,
+            "quality": "standard",
             "size": "1024x1024"
         }
         
-        logger.info("Sending Ghibli image generation request to OpenAI API (DALL-E 2)")
+        logger.info("Sending Ghibli image generation request to OpenAI API (gpt-image-1)")
         # Make the API request
         response = requests.post(
             "https://api.openai.com/v1/images/generations",
@@ -263,63 +264,18 @@ def generate_ghibli_style_image(image_data, api_key):
                     image.save(temp_file.name)
                     temp_file.close()
                     
-                    logger.info(f"Successfully generated Ghibli-style image: {temp_file.name}")
+                    logger.info(f"Successfully generated Ghibli-style image with gpt-image-1: {temp_file.name}")
                     return temp_file.name
                 else:
                     logger.error(f"Error downloading Ghibli image: {img_response.status_code}")
             else:
                 logger.error("No image URL found in the response")
         else:
-            logger.error(f"Error generating Ghibli image with DALL-E 2: {response.status_code}")
+            logger.error(f"Error generating Ghibli image with gpt-image-1: {response.status_code}")
             logger.error(f"Response: {response.text}")
-            
-            # Try with gpt-image-1 as a fallback
-            try:
-                # Set up the data for the API request with gpt-image-1
-                data = {
-                    "model": "gpt-image-1",
-                    "prompt": prompt,
-                    "n": 1,
-                    "quality": "standard",
-                    "size": "1024x1024"
-                }
-                
-                logger.info("Sending Ghibli image generation request to OpenAI API (gpt-image-1)")
-                # Make the API request
-                response = requests.post(
-                    "https://api.openai.com/v1/images/generations",
-                    headers=headers,
-                    data=json.dumps(data),
-                    timeout=30
-                )
-                
-                # Check if the request was successful
-                if response.status_code == 200:
-                    response_data = response.json()
-                    
-                    # Get the image URL
-                    if "data" in response_data and len(response_data["data"]) > 0 and "url" in response_data["data"][0]:
-                        image_url = response_data["data"][0]["url"]
-                        
-                        # Download the image
-                        img_response = requests.get(image_url)
-                        if img_response.status_code == 200:
-                            # Save the image to a temporary file
-                            image = Image.open(BytesIO(img_response.content))
-                            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-                            image.save(temp_file.name)
-                            temp_file.close()
-                            
-                            logger.info(f"Successfully generated Ghibli-style image with gpt-image-1: {temp_file.name}")
-                            return temp_file.name
-                else:
-                    logger.error(f"Error generating Ghibli image with gpt-image-1: {response.status_code}")
-                    logger.error(f"Response: {response.text}")
-            except Exception as e:
-                logger.error(f"Error with gpt-image-1 fallback: {str(e)}")
         
-        # If all attempts fail, return None
-        logger.error("All attempts to generate Ghibli-style image failed")
+        # If attempt fails, return None
+        logger.error("Failed to generate Ghibli-style image")
         return None
     except Exception as e:
         logger.error(f"Error generating Ghibli-style image: {str(e)}")
@@ -343,11 +299,12 @@ def generate_illustration(description, theme):
             "Authorization": f"Bearer {api_key}"
         }
         
-        # Try with DALL-E 2 first as it might have better success rate
+        # Use only gpt-image-1 as requested
         data = {
-            "model": "dall-e-2",
+            "model": "gpt-image-1",
             "prompt": prompt,
             "n": 1,
+            "quality": "low",
             "size": "1024x1024"
         }
         
@@ -384,55 +341,10 @@ def generate_illustration(description, theme):
             else:
                 logger.error("No image URL found in the response")
         else:
-            logger.error(f"Error generating illustration with DALL-E 2: {response.status_code}")
+            logger.error(f"Error generating illustration with gpt-image-1: {response.status_code}")
             logger.error(f"Response: {response.text}")
-            
-            # Try with gpt-image-1 as a fallback
-            try:
-                # Set up the data for the API request with gpt-image-1
-                data = {
-                    "model": "gpt-image-1",
-                    "prompt": prompt,
-                    "n": 1,
-                    "quality": "low",
-                    "size": "1024x1024"
-                }
-                
-                logger.info("Trying gpt-image-1 as fallback")
-                # Make the API request
-                response = requests.post(
-                    "https://api.openai.com/v1/images/generations",
-                    headers=headers,
-                    data=json.dumps(data),
-                    timeout=30
-                )
-                
-                # Check if the request was successful
-                if response.status_code == 200:
-                    response_data = response.json()
-                    
-                    # Get the image URL
-                    if "data" in response_data and len(response_data["data"]) > 0 and "url" in response_data["data"][0]:
-                        image_url = response_data["data"][0]["url"]
-                        
-                        # Download the image
-                        img_response = requests.get(image_url)
-                        if img_response.status_code == 200:
-                            # Save the image to a temporary file
-                            image = Image.open(BytesIO(img_response.content))
-                            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-                            image.save(temp_file.name)
-                            temp_file.close()
-                            
-                            logger.info(f"Successfully generated illustration with gpt-image-1: {temp_file.name}")
-                            return temp_file.name
-                else:
-                    logger.error(f"Error generating illustration with gpt-image-1: {response.status_code}")
-                    logger.error(f"Response: {response.text}")
-            except Exception as e:
-                logger.error(f"Error with gpt-image-1 fallback: {str(e)}")
         
-        # If all attempts fail, create a placeholder image with the description
+        # If attempt fails, create a placeholder image with the description
         logger.warning("Creating placeholder image with description text")
         placeholder_path = os.path.join(tempfile.gettempdir(), f'placeholder_{hash(description)}.jpg')
         img = Image.new('RGB', (800, 600), color=(240, 240, 240))

@@ -7,7 +7,7 @@ import urllib.parse
 import logging
 from flask import Flask, render_template_string, request, redirect, url_for, send_file, abort
 from werkzeug.utils import secure_filename
-from debug_enhanced_story_generator import (
+from enhanced_story_generator import (
     generate_story, 
     generate_illustration, 
     extract_illustration_descriptions,
