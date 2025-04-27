@@ -3,9 +3,10 @@ import tempfile
 import time
 import base64
 import uuid
+import urllib.parse
 from flask import Flask, render_template_string, request, redirect, url_for, send_file, abort
 from werkzeug.utils import secure_filename
-from openai_story_generator import generate_story, generate_illustration, extract_illustration_descriptions
+from enhanced_story_generator import generate_story, generate_illustration, extract_illustration_descriptions
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
@@ -145,12 +146,15 @@ MAIN_TEMPLATE = """
             padding: 1rem;
             margin: 1.5rem 0;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            text-align: center;
         }
         
         .illustration-image {
             max-width: 100%;
             border-radius: 0.5rem;
             margin-bottom: 0.5rem;
+            display: block;
+            margin: 0 auto 1rem auto;
         }
         
         /* 3D Book Styles */
@@ -252,6 +256,19 @@ MAIN_TEMPLATE = """
             margin-bottom: 20px;
         }
         
+        .book-cover-image {
+            max-width: 150px;
+            border-radius: 5px;
+            margin: 20px 0;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        .story-content {
+            margin-top: 2rem;
+            font-size: 1.1rem;
+            line-height: 1.8;
+        }
+        
         @media (max-width: 768px) {
             .hero-section {
                 padding: 3rem 0;
@@ -327,7 +344,7 @@ UPLOAD_TEMPLATE = """
 <div class="row mb-5">
     <div class="col-md-4 mb-4">
         <div class="card h-100">
-            <img src="https://source.unsplash.com/random/300x200/?child,adventure" class="card-img-top" alt="Adventure">
+            <img src="https://images.unsplash.com/photo-1519340241574-2cec6aef0c01?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80" class="card-img-top" alt="Adventure">
             <div class="card-body">
                 <h5 class="card-title">Adventure Stories</h5>
                 <p class="card-text">Exciting journeys to magical lands where your child becomes the hero of their own adventure.</p>
@@ -336,7 +353,7 @@ UPLOAD_TEMPLATE = """
     </div>
     <div class="col-md-4 mb-4">
         <div class="card h-100">
-            <img src="https://source.unsplash.com/random/300x200/?child,fantasy" class="card-img-top" alt="Fantasy">
+            <img src="https://images.unsplash.com/photo-1518826778770-a729fb53327c?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80" class="card-img-top" alt="Fantasy">
             <div class="card-body">
                 <h5 class="card-title">Fantasy Tales</h5>
                 <p class="card-text">Enchanted worlds with dragons, wizards, and magical creatures where imagination knows no bounds.</p>
@@ -345,7 +362,7 @@ UPLOAD_TEMPLATE = """
     </div>
     <div class="col-md-4 mb-4">
         <div class="card h-100">
-            <img src="https://source.unsplash.com/random/300x200/?child,space" class="card-img-top" alt="Space">
+            <img src="https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80" class="card-img-top" alt="Space">
             <div class="card-body">
                 <h5 class="card-title">Space Odysseys</h5>
                 <p class="card-text">Interstellar journeys through the cosmos where your child explores distant planets and meets aliens.</p>
@@ -367,6 +384,15 @@ UPLOAD_TEMPLATE = """
             <div class="form-text">We'll use this photo to personalize the story.</div>
         </div>
         <div class="mb-3">
+            <label for="age_range" class="form-label">Age Range</label>
+            <select class="form-select" id="age_range" name="age_range" required>
+                <option value="2-4">2-4 years</option>
+                <option value="4-6" selected>4-6 years</option>
+                <option value="6-8">6-8 years</option>
+                <option value="8-10">8-10 years</option>
+            </select>
+        </div>
+        <div class="mb-3">
             <label for="theme" class="form-label">Story Theme</label>
             <select class="form-select" id="theme" name="theme" required>
                 <option value="adventure">Adventure</option>
@@ -378,7 +404,7 @@ UPLOAD_TEMPLATE = """
             </select>
         </div>
         <div class="mb-3 form-check">
-            <input type="checkbox" class="form-check-input" id="generate_illustrations" name="generate_illustrations" value="true">
+            <input type="checkbox" class="form-check-input" id="generate_illustrations" name="generate_illustrations" value="true" checked>
             <label class="form-check-label" for="generate_illustrations">Generate illustrations for the story</label>
         </div>
         <div class="text-center">
@@ -443,7 +469,7 @@ STORY_TEMPLATE = """
             <h1 class="mb-3">{{ child_name }}'s {{ theme|title }} Story</h1>
             <div class="d-flex gap-2 mb-4">
                 <span class="badge bg-primary">{{ theme|title }}</span>
-                <span class="badge bg-secondary">Personalized</span>
+                <span class="badge bg-secondary">Age: {{ age_range }}</span>
                 <span class="badge bg-info">AI-Generated</span>
             </div>
         </div>
@@ -456,8 +482,8 @@ STORY_TEMPLATE = """
         <div class="col-md-4 mb-4">
             <img src="{{ image_path }}" alt="{{ child_name }}" class="child-image img-fluid mb-3">
             <div class="d-grid gap-2">
-                <a href="#" class="btn btn-primary"><i class="bi bi-printer me-2"></i>Print Story</a>
-                <a href="#" class="btn btn-outline-primary"><i class="bi bi-share me-2"></i>Share Story</a>
+                <a href="#" class="btn btn-primary print-story"><i class="bi bi-printer me-2"></i>Print Story</a>
+                <a href="#" class="btn btn-outline-primary share-story"><i class="bi bi-share me-2"></i>Share Story</a>
             </div>
         </div>
         <div class="col-md-8">
@@ -466,8 +492,9 @@ STORY_TEMPLATE = """
                 <div class="book">
                     <div class="book-front">
                         <div class="book-title">{{ child_name }}'s {{ theme|title }} Adventure</div>
-                        <div class="book-author">A Personalized Story</div>
-                        <img src="{{ image_path }}" alt="{{ child_name }}" style="max-width: 150px; border-radius: 5px; margin: 20px 0;">
+                        <div class="book-author">A Personalized Story for Ages {{ age_range }}</div>
+                        <img src="{{ image_path }}" alt="{{ child_name }}" class="book-cover-image">
+                        <p>Hover to open the book</p>
                     </div>
                     <div class="book-back"></div>
                     <div class="book-spine"></div>
@@ -489,14 +516,14 @@ STORY_TEMPLATE = """
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         // Print functionality
-        const printBtn = document.querySelector('.btn-primary');
+        const printBtn = document.querySelector('.print-story');
         printBtn.addEventListener('click', function(e) {
             e.preventDefault();
             window.print();
         });
         
         // Share functionality (placeholder)
-        const shareBtn = document.querySelector('.btn-outline-primary');
+        const shareBtn = document.querySelector('.share-story');
         shareBtn.addEventListener('click', function(e) {
             e.preventDefault();
             alert('Sharing functionality coming soon!');
@@ -522,6 +549,15 @@ STORY_TEMPLATE = """
         book.addEventListener('mouseleave', function() {
             // Resume automatic rotation
         });
+        
+        // Ensure all images are loaded
+        const images = document.querySelectorAll('.illustration-image');
+        images.forEach(img => {
+            img.addEventListener('error', function() {
+                this.src = '/static/placeholder.jpg';
+                this.alt = 'Image could not be loaded';
+            });
+        });
     });
 </script>
 {% endblock %}
@@ -539,6 +575,7 @@ def generate():
     """Generate a personalized story based on the uploaded image."""
     child_name = request.form.get('child_name', '')
     theme = request.form.get('theme', 'adventure')
+    age_range = request.form.get('age_range', '4-6')
     generate_illustrations = request.form.get('generate_illustrations') == 'true'
     
     # Check if an image was uploaded
@@ -556,7 +593,7 @@ def generate():
     image_data = encode_image(temp_path)
     
     # Generate the story
-    story = generate_story(child_name, image_data, theme, generate_illustrations)
+    story = generate_story(child_name, image_data, theme, age_range, generate_illustrations)
     
     # Store the story and image path
     story_id = str(int(time.time()))
@@ -565,6 +602,7 @@ def generate():
         'image_path': temp_path,
         'child_name': child_name,
         'theme': theme,
+        'age_range': age_range,
         'generate_illustrations': generate_illustrations
     }
     
@@ -580,7 +618,10 @@ def generate():
             image_path = generate_illustration(desc, theme)
             
             if image_path:
+                # Create a unique ID for this illustration
+                illustration_id = str(uuid.uuid4())
                 illustration_images[story_id].append({
+                    'id': illustration_id,
                     'description': desc,
                     'image_path': image_path
                 })
@@ -603,8 +644,8 @@ def view_story(story_id):
         # Replace illustration descriptions with actual images
         for illustration in illustration_images[story_id]:
             desc = illustration['description']
-            img_path = illustration['image_path']
-            img_url = f"/illustration/{story_id}/{desc}"
+            illustration_id = illustration['id']
+            img_url = f"/illustration/{story_id}/{illustration_id}"
             img_tag = f'<div class="illustration"><img src="{img_url}" alt="{desc}" class="illustration-image"><p><i class="bi bi-image me-2"></i>{desc}</p></div>'
             story_html = story_html.replace(f'[ILLUSTRATION: {desc}]', img_tag)
     else:
@@ -623,6 +664,7 @@ def view_story(story_id):
         image_path=f"/image/{story_id}",
         child_name=story_data['child_name'],
         theme=story_data['theme'],
+        age_range=story_data['age_range'],
         page_title=f"{story_data['child_name']}'s Story | Storybook Magic"
     )
     
@@ -636,17 +678,33 @@ def get_image(story_id):
     
     return send_file(stories[story_id]['image_path'])
 
-@app.route('/illustration/<story_id>/<description>')
-def get_illustration(story_id, description):
-    """Serve an illustration image."""
+@app.route('/illustration/<story_id>/<illustration_id>')
+def get_illustration(story_id, illustration_id):
+    """Serve an illustration image using a unique ID instead of description."""
     if story_id not in illustration_images:
         return "Illustration not found", 404
     
     for illustration in illustration_images[story_id]:
-        if illustration['description'] == description:
+        if illustration['id'] == illustration_id:
             return send_file(illustration['image_path'])
     
     return "Illustration not found", 404
+
+# Create a static directory for placeholder images
+@app.route('/static/<filename>')
+def static_files(filename):
+    """Serve static files."""
+    if filename == 'placeholder.jpg':
+        # Return a simple placeholder image
+        placeholder_path = os.path.join(tempfile.gettempdir(), 'placeholder.jpg')
+        if not os.path.exists(placeholder_path):
+            from PIL import Image, ImageDraw, ImageFont
+            img = Image.new('RGB', (400, 300), color=(200, 200, 200))
+            d = ImageDraw.Draw(img)
+            d.text((150, 150), "Image not available", fill=(0, 0, 0))
+            img.save(placeholder_path)
+        return send_file(placeholder_path)
+    return "File not found", 404
 
 if __name__ == '__main__':
     # Use the PORT environment variable provided by Render
