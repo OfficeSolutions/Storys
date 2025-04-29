@@ -395,3 +395,13 @@ def generate_illustration(description, api_key):
         logger.error(f"Error generating illustration: {str(e)}")
         return _create_placeholder_image(f"Illustration generation failed: {str(e)[:100]}", error=True)
 
+
+
+import re
+
+def extract_illustration_descriptions(story):
+    """Extract illustration descriptions from the story text."""
+    descriptions = re.findall(r'\[ILLUSTRATION: (.*?)\]', story)
+    logger.info(f"Extracted {len(descriptions)} illustration descriptions.")
+    return descriptions
+
