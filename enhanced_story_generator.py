@@ -166,7 +166,7 @@ def analyze_image(image_data, api_key):
         
         # Set up the data for the API request
         data = {
-            "model": "gpt-4",
+            "model": "gpt-4o",
             "messages": [
                 {
                     "role": "system",
