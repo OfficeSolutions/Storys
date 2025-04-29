@@ -4,44 +4,79 @@ import json
 import tempfile
 import base64
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import logging
+import textwrap
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format=\"%(asctime)s - %(levelname)s - %(message)s\")
 logger = logging.getLogger(__name__)
 
-def generate_story(child_name, image_data, theme, age_range="4-6", generate_illustrations=False, rhyming=False):
-    """Generate a personalized story based on the child's name, image, and theme using OpenAI."""
+def _create_placeholder_image(text, error=False):
+    \"\"\"Helper function to create a placeholder image with text.\"\"\"
+    try:
+        placeholder_path = os.path.join(tempfile.gettempdir(), f\"placeholder_{hash(text)}.jpg\")
+        img = Image.new("RGB", (1024, 1024), color=(240, 240, 240) if not error else (255, 200, 200))
+        d = ImageDraw.Draw(img)
+        
+        # Attempt to load a font, fallback to default if not found
+        try:
+            # Using a common font path, adjust if needed
+            font = ImageFont.truetype(\"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf\", 40)
+        except IOError:
+            font = ImageFont.load_default()
+            
+        # Wrap text
+        wrapped_text = textwrap.fill(text, width=40)
+        
+        # Calculate text position (centered)
+        text_bbox = d.textbbox((0, 0), wrapped_text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        position = ((1024 - text_width) / 2, (1024 - text_height) / 2)
+        
+        # Draw the text
+        d.text(position, wrapped_text, fill=(0, 0, 0), font=font)
+        img.save(placeholder_path)
+        logger.info(f\"Created placeholder image: {placeholder_path}\")
+        return placeholder_path
+    except Exception as e:
+        logger.error(f\"Failed to create placeholder image: {str(e)}\")
+        # Return a path to a minimal fallback if even placeholder creation fails
+        # This part might need a pre-existing minimal error image or handle differently
+        return None # Or path to a static error image asset
+
+def generate_story(child_name, image_data, theme, age_range=\"4-6\", generate_illustrations=False, rhyming=False):
+    \"\"\"Generate a personalized story based on the child\"s name, image, and theme using OpenAI.\"\"\"
     try:
         # Get API key from environment variable
-        api_key = os.environ.get('OPENAI_API_KEY')
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            logger.error("OPENAI_API_KEY environment variable not set")
-            raise ValueError("OPENAI_API_KEY environment variable not set")
+            logger.error(\"OPENAI_API_KEY environment variable not set\")
+            raise ValueError(\"OPENAI_API_KEY environment variable not set\")
         
         # Determine story complexity based on age range
-        if age_range == "2-4":
-            complexity = "very simple with short sentences, basic vocabulary, and a straightforward plot. Length should be around 800-1000 words."
-            reading_level = "toddlers and preschoolers (2-4 years old)"
-        elif age_range == "4-6":
-            complexity = "simple but engaging with slightly longer sentences and a clear plot. Length should be around 1000-1500 words."
-            reading_level = "kindergarteners (4-6 years old)"
-        elif age_range == "6-8":
-            complexity = "moderately complex with varied sentence structures, richer vocabulary, and a more developed plot. Length should be around 1500-2000 words."
-            reading_level = "early elementary school children (6-8 years old)"
+        if age_range == \"2-4\":
+            complexity = \"very simple with short sentences, basic vocabulary, and a straightforward plot. Length should be around 800-1000 words.\"
+            reading_level = \"toddlers and preschoolers (2-4 years old)\"
+        elif age_range == \"4-6\":
+            complexity = \"simple but engaging with slightly longer sentences and a clear plot. Length should be around 1000-1500 words.\"
+            reading_level = \"kindergarteners (4-6 years old)\"
+        elif age_range == \"6-8\":
+            complexity = \"moderately complex with varied sentence structures, richer vocabulary, and a more developed plot. Length should be around 1500-2000 words.\"
+            reading_level = \"early elementary school children (6-8 years old)\"
         else:  # 8-10
-            complexity = "more complex with longer paragraphs, advanced vocabulary, and a multi-layered plot. Length should be around 2000-2500 words."
-            reading_level = "older elementary school children (8-10 years old)"
+            complexity = \"more complex with longer paragraphs, advanced vocabulary, and a multi-layered plot. Length should be around 2000-2500 words.\"
+            reading_level = \"older elementary school children (8-10 years old)\"
         
         # Analyze the image to extract details about the child
         child_description = analyze_image(image_data, api_key)
-        logger.info(f"Child description: {child_description[:100]}...")
+        logger.info(f\"Child description: {child_description[:100]}...\")
         
         # Create a prompt for the story
-        rhyming_instruction = "The story should be written in rhyming verse, with a consistent rhythm and rhyme scheme appropriate for a bedtime story." if rhyming else ""
+        rhyming_instruction = \"The story should be written in rhyming verse, with a consistent rhythm and rhyme scheme appropriate for a bedtime story.\" if rhyming else \"\"
         
-        prompt = f"""
+        prompt = f\"\"\"
         Create a personalized bedtime story for a child named {child_name}. 
         The story should be in the {theme} theme and should be appropriate for {reading_level}.
         
@@ -54,48 +89,48 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         
         The story should have a clear beginning, middle, and end, with a positive message or lesson.
         
-        {"Include 4-6 places in the story where illustrations would be appropriate. Mark these with [ILLUSTRATION: brief description of the illustration]. Make the illustrations descriptions detailed and specific to the story, and include the child's visual characteristics in each illustration description." if generate_illustrations else ""}
+        {\"Include 4-6 places in the story where illustrations would be appropriate. Mark these with [ILLUSTRATION: brief description of the illustration]. Make the illustrations descriptions detailed and specific to the story, and include the child\"s visual characteristics in each illustration description.\" if generate_illustrations else \"\"}
         
         Make the story engaging, imaginative, and appropriate for the age range.
-        """
+        \"\"\"
         
         # Set up the headers for the API request
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
+            \"Content-Type\": \"application/json\",
+            \"Authorization\": f\"Bearer {api_key}\"
         }
         
         # Set up the data for the API request
         data = {
-            "model": "gpt-4o",
-            "messages": [
+            \"model\": \"gpt-4o\",
+            \"messages\": [
                 {
-                    "role": "system",
-                    "content": f"You are a creative children's story writer specializing in stories for {reading_level}. Create engaging, age-appropriate stories that feature the child as the main character. Incorporate details from the child's appearance in the image. {rhyming_instruction}"
+                    \"role\": \"system\",
+                    \"content\": f\"You are a creative children\"s story writer specializing in stories for {reading_level}. Create engaging, age-appropriate stories that feature the child as the main character. Incorporate details from the child\"s appearance in the image. {rhyming_instruction}\"
                 },
                 {
-                    "role": "user",
-                    "content": [
+                    \"role\": \"user\",
+                    \"content\": [
                         {
-                            "type": "text",
-                            "text": prompt
+                            \"type\": \"text\",
+                            \"text\": prompt
                         },
                         {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_data}"
+                            \"type\": \"image_url\",
+                            \"image_url\": {
+                                \"url\": f\"data:image/jpeg;base64,{image_data}\"
                             }
                         }
                     ]
                 }
             ],
-            "max_tokens": 4000
+            \"max_tokens\": 4000
         }
         
-        logger.info(f"Sending story generation request to OpenAI API")
+        logger.info(f\"Sending story generation request to OpenAI API\")
         # Make the API request
         response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
+            \"https://api.openai.com/v1/chat/completions\",
             headers=headers,
             data=json.dumps(data),
             timeout=120  # Increased timeout for longer stories
@@ -104,85 +139,85 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         # Check if the request was successful
         if response.status_code == 200:
             response_data = response.json()
-            story = response_data["choices"][0]["message"]["content"]
-            logger.info(f"Successfully generated story of length {len(story)}")
+            story = response_data[\"choices\"][0][\"message\"][\"content\"]
+            logger.info(f\"Successfully generated story of length {len(story)}\")
             return story
         else:
-            logger.error(f"Error generating story: {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            raise Exception(f"Error generating story: {response.status_code}")
+            logger.error(f\"Error generating story: {response.status_code}\")
+            logger.error(f\"Response: {response.text}\")
+            raise Exception(f\"Error generating story: {response.status_code}\")
             
     except Exception as e:
         # Fallback to a simple story if the API fails
-        logger.error(f"Error generating story: {str(e)}")
+        logger.error(f\"Error generating story: {str(e)}\")
         
         # Adjust fallback story length based on age range
-        if age_range == "2-4":
-            story_length = "short"
-        elif age_range == "4-6":
-            story_length = "medium-length"
-        elif age_range == "6-8":
-            story_length = "longer"
+        if age_range == \"2-4\":
+            story_length = \"short\"
+        elif age_range == \"4-6\":
+            story_length = \"medium-length\"
+        elif age_range == \"6-8\":
+            story_length = \"longer\"
         else:  # 8-10
-            story_length = "elaborate"
+            story_length = \"elaborate\"
             
-        return f"""
-        # {child_name}'s {theme.title()} Adventure
+        return f\"\"\"
+        # {child_name}\'s {theme.title()} Adventure
 
         Once upon a time, there was a child named {child_name} who loved {theme} adventures.
         
         One day, {child_name} discovered a magical door that led to a world of {theme}.
         
-        {"[ILLUSTRATION: A child with features similar to the uploaded photo, standing in front of a magical glowing door that leads to a " + theme + " world]" if generate_illustrations else ""}
+        {\"[ILLUSTRATION: A child with features similar to the uploaded photo, standing in front of a magical glowing door that leads to a \" + theme + \" world]\" if generate_illustrations else \"\"}
         
         In this world, {child_name} met friendly creatures who became their guides.
         
-        {"[ILLUSTRATION: " + child_name + " meeting colorful, friendly creatures in a fantastical " + theme + " landscape with amazing details]" if generate_illustrations else ""}
+        {\"[ILLUSTRATION: \" + child_name + \" meeting colorful, friendly creatures in a fantastical \" + theme + \" landscape with amazing details]\" if generate_illustrations else \"\"}
         
         {child_name} embarked on a {story_length} journey through mountains, valleys, and mysterious forests.
         
-        {"[ILLUSTRATION: An overhead view of " + child_name + " traveling through a varied landscape with mountains, valleys, and a mysterious forest]" if generate_illustrations else ""}
+        {\"[ILLUSTRATION: An overhead view of \" + child_name + \" traveling through a varied landscape with mountains, valleys, and a mysterious forest]\" if generate_illustrations else \"\"}
         
         After many exciting adventures, {child_name} learned the importance of courage and friendship.
         
-        {"[ILLUSTRATION: " + child_name + " standing bravely with new friends, facing a challenge together in the " + theme + " world]" if generate_illustrations else ""}
+        {\"[ILLUSTRATION: \" + child_name + \" standing bravely with new friends, facing a challenge together in the \" + theme + \" world]\" if generate_illustrations else \"\"}
         
-        When {child_name} returned home, they couldn't wait to share their amazing story with everyone.
+        When {child_name} returned home, they couldn\"t wait to share their amazing story with everyone.
         
-        {"[ILLUSTRATION: " + child_name + " back at home, excitedly telling their story to family members who listen with wonder]" if generate_illustrations else ""}
+        {\"[ILLUSTRATION: \" + child_name + \" back at home, excitedly telling their story to family members who listen with wonder]\" if generate_illustrations else \"\"}
         
         The End.
-        """
+        \"\"\"
 
 def analyze_image(image_data, api_key):
-    """Analyze the image to extract details about the child."""
+    \"\"\"Analyze the image to extract details about the child.\"\"\"
     try:
-        logger.info("Analyzing uploaded image")
+        logger.info(\"Analyzing uploaded image\")
         # Set up the headers for the API request
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
+            \"Content-Type\": \"application/json\",
+            \"Authorization\": f\"Bearer {api_key}\"
         }
         
         # Set up the data for the API request
         data = {
-            "model": "gpt-4o",
-            "messages": [
+            \"model\": \"gpt-4o\",
+            \"messages\": [
                 {
-                    "role": "system",
-                    "content": "You are an assistant that analyzes images of children to provide detailed descriptions for story personalization. Focus on visual details like hair color, hair style, eye color, clothing, and any distinctive features. Be specific but respectful and appropriate."
+                    \"role\": \"system\",
+                    \"content\": \"You are an assistant that analyzes images of children to provide detailed descriptions for story personalization. Focus on visual details like hair color, hair style, eye color, clothing, and any distinctive features. Be specific but respectful and appropriate.\"
                 },
                 {
-                    "role": "user",
-                    "content": [
+                    \"role\": \"user\",
+                    \"content\": [
                         {
-                            "type": "text",
-                            "text": "Please describe this child in detail for a personalized story. Include hair color, hair style, eye color, clothing colors, and any distinctive features. Be specific but appropriate."
+                            \"type\": \"text\",
+                            \"text\": \"Please describe this child in detail for a personalized story. Include hair color, hair style, eye color, clothing colors, and any distinctive features. Be specific but appropriate.\"
                         },
                         {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_data}"
+                            \"type\": \"image_url\",
+                            \"image_url\": {
+                                \"url\": f\"data:image/jpeg;base64,{image_data}\"
                             }
                         }
                     ]
@@ -192,7 +227,7 @@ def analyze_image(image_data, api_key):
         
         # Make the API request
         response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
+            \"https://api.openai.com/v1/chat/completions\",
             headers=headers,
             data=json.dumps(data),
             timeout=30
@@ -201,47 +236,47 @@ def analyze_image(image_data, api_key):
         # Check if the request was successful
         if response.status_code == 200:
             response_data = response.json()
-            description = response_data["choices"][0]["message"]["content"]
-            logger.info("Successfully analyzed image")
+            description = response_data[\"choices\"][0][\"message\"][\"content\"]
+            logger.info(\"Successfully analyzed image\")
             return description
         else:
-            logger.error(f"Error analyzing image: {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            return "a young child with a bright smile"
+            logger.error(f\"Error analyzing image: {response.status_code}\")
+            logger.error(f\"Response: {response.text}\")
+            return \"a young child with a bright smile\"
             
     except Exception as e:
-        logger.error(f"Error analyzing image: {str(e)}")
-        return "a young child with a bright smile"
+        logger.error(f\"Error analyzing image: {str(e)}\")
+        return \"a young child with a bright smile\"
 
 def generate_ghibli_style_image(image_data, api_key):
-    """Generate a Studio Ghibli style image based on the uploaded photo."""
+    \"\"\"Generate a Studio Ghibli style image based on the uploaded photo.\"\"\"
     try:
-        logger.info("Generating Ghibli-style main image")
+        logger.info(\"Generating Ghibli-style main image\")
         # Analyze the image to extract details about the child
         child_description = analyze_image(image_data, api_key)
         
         # Create a prompt for the Ghibli-style image
-        prompt = f"Create a Studio Ghibli style illustration of a child who looks like: {child_description}. The image should have the magical, whimsical quality of Ghibli films, with soft colors, detailed backgrounds, and a sense of wonder. Make it appropriate for a children's book cover."
+        prompt = f\"Create a Studio Ghibli style illustration of a child who looks like: {child_description}. The image should have the magical, whimsical quality of Ghibli films, with soft colors, detailed backgrounds, and a sense of wonder. Make it appropriate for a children\"s book cover.\"
         
         # Set up the headers for the API request
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
+            \"Content-Type\": \"application/json\",
+            \"Authorization\": f\"Bearer {api_key}\"
         }
         
         # Use only gpt-image-1 as requested
         data = {
-            "model": "gpt-image-1",
-            "prompt": prompt,
-            "n": 1,
-            "quality": "low",
-            "size": "1024x1024"
+            \"model\": \"gpt-image-1\",
+            \"prompt\": prompt,
+            \"n\": 1,
+            \"quality\": \"low\",
+            \"size\": \"1024x1024\"
         }
         
-        logger.info("Sending Ghibli image generation request to OpenAI API (gpt-image-1)")
+        logger.info(\"Sending Ghibli image generation request to OpenAI API (gpt-image-1)\")
         # Make the API request
         response = requests.post(
-            "https://api.openai.com/v1/images/generations",
+            \"https://api.openai.com/v1/images/generations\",
             headers=headers,
             data=json.dumps(data),
             timeout=30
@@ -250,68 +285,74 @@ def generate_ghibli_style_image(image_data, api_key):
         # Check if the request was successful
         if response.status_code == 200:
             response_data = response.json()
+            logger.info(f\"Ghibli image generation API response: {json.dumps(response_data)}\") # Log the full response
             
             # Get the image URL
-            if "data" in response_data and len(response_data["data"]) > 0 and "url" in response_data["data"][0]:
-                image_url = response_data["data"][0]["url"]
+            if \"data\" in response_data and len(response_data[\"data\"]) > 0 and \"url\" in response_data[\"data\"][0]:
+                image_url = response_data[\"data\"][0][\"url\"]
                 
                 # Download the image
                 img_response = requests.get(image_url)
                 if img_response.status_code == 200:
                     # Save the image to a temporary file
                     image = Image.open(BytesIO(img_response.content))
-                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=\".jpg\")
                     image.save(temp_file.name)
                     temp_file.close()
                     
-                    logger.info(f"Successfully generated Ghibli-style image with gpt-image-1: {temp_file.name}")
+                    logger.info(f\"Successfully generated Ghibli-style image with gpt-image-1: {temp_file.name}\")
                     return temp_file.name
                 else:
-                    logger.error(f"Error downloading Ghibli image: {img_response.status_code}")
+                    logger.error(f\"Error downloading Ghibli image: {img_response.status_code}\")
+                    return _create_placeholder_image(\"Failed to download Ghibli-style image.\", error=True)
             else:
-                logger.error("No image URL found in the response")
+                logger.error(\"No image URL found in the response\")
+                # Check for content moderation flags
+                if response_data.get(\"data\") and response_data[\"data\"][0].get(\"revised_prompt\"):
+                     logger.warning(f\"Prompt was revised: {response_data[\"data\"][0][\"revised_prompt\"]}\")
+                if response_data.get(\"error\"):
+                     logger.error(f\"API Error in response: {response_data[\"error\"]}\")
+                return _create_placeholder_image(\"Ghibli-style image generation failed (No URL). Check logs for details.\", error=True)
         else:
-            logger.error(f"Error generating Ghibli image with gpt-image-1: {response.status_code}")
-            logger.error(f"Response: {response.text}")
+            logger.error(f\"Error generating Ghibli image with gpt-image-1: {response.status_code}\")
+            logger.error(f\"Response: {response.text}\")
+            return _create_placeholder_image(f\"Ghibli-style image generation failed (HTTP {response.status_code}). Check logs.\", error=True)
         
-        # If attempt fails, return None
-        logger.error("Failed to generate Ghibli-style image")
-        return None
     except Exception as e:
-        logger.error(f"Error generating Ghibli-style image: {str(e)}")
-        return None
+        logger.error(f\"Error generating Ghibli-style image: {str(e)}\")
+        return _create_placeholder_image(f\"Ghibli-style image generation failed: {str(e)[:100]}\", error=True)
 
 def generate_illustration(description, theme):
-    """Generate an illustration based on the description using OpenAI's image generation models."""
+    \"\"\"Generate an illustration based on the description using OpenAI\"s image generation models.\"\"\"
     try:
         # Get API key from environment variable
-        api_key = os.environ.get('OPENAI_API_KEY')
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            logger.error("OPENAI_API_KEY environment variable not set")
-            raise ValueError("OPENAI_API_KEY environment variable not set")
+            logger.error(\"OPENAI_API_KEY environment variable not set\")
+            raise ValueError(\"OPENAI_API_KEY environment variable not set\")
         
         # Create a prompt for the illustration
-        prompt = f"A children's book illustration of {description}. Theme: {theme}. Style: colorful, whimsical, appropriate for children ages 4-8."
+        prompt = f\"A children\"s book illustration of {description}. Theme: {theme}. Style: colorful, whimsical, appropriate for children ages 4-8.\"
         
         # Set up the headers for the API request
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
+            \"Content-Type\": \"application/json\",
+            \"Authorization\": f\"Bearer {api_key}\"
         }
         
         # Use only gpt-image-1 as requested
         data = {
-            "model": "gpt-image-1",
-            "prompt": prompt,
-            "n": 1,
-            "quality": "low",
-            "size": "1024x1024"
+            \"model\": \"gpt-image-1\",
+            \"prompt\": prompt,
+            \"n\": 1,
+            \"quality\": \"low\",
+            \"size\": \"1024x1024\"
         }
         
-        logger.info(f"Generating illustration for: {description[:50]}...")
+        logger.info(f\"Generating illustration for: {description[:50]}...\")
         # Make the API request
         response = requests.post(
-            "https://api.openai.com/v1/images/generations",
+            \"https://api.openai.com/v1/images/generations\",
             headers=headers,
             data=json.dumps(data),
             timeout=30
@@ -320,65 +361,51 @@ def generate_illustration(description, theme):
         # Check if the request was successful
         if response.status_code == 200:
             response_data = response.json()
+            logger.info(f\"Illustration generation API response: {json.dumps(response_data)}\") # Log the full response
             
             # Get the image URL
-            if "data" in response_data and len(response_data["data"]) > 0 and "url" in response_data["data"][0]:
-                image_url = response_data["data"][0]["url"]
+            if \"data\" in response_data and len(response_data[\"data\"]) > 0 and \"url\" in response_data[\"data\"][0]:
+                image_url = response_data[\"data\"][0][\"url\"]
                 
                 # Download the image
                 img_response = requests.get(image_url)
                 if img_response.status_code == 200:
                     # Save the image to a temporary file
                     image = Image.open(BytesIO(img_response.content))
-                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=\".jpg\")
                     image.save(temp_file.name)
                     temp_file.close()
                     
-                    logger.info(f"Successfully generated illustration: {temp_file.name}")
+                    logger.info(f\"Successfully generated illustration: {temp_file.name}\")
                     return temp_file.name
                 else:
-                    logger.error(f"Error downloading image: {img_response.status_code}")
+                    logger.error(f\"Error downloading image: {img_response.status_code}\")
+                    return _create_placeholder_image(f\"Failed to download illustration (HTTP {img_response.status_code}).\", error=True)
             else:
-                logger.error("No image URL found in the response")
+                logger.error(\"No image URL found in the response\")
+                # Check for content moderation flags
+                if response_data.get(\"data\") and response_data[\"data\"][0].get(\"revised_prompt\"):
+                     logger.warning(f\"Prompt was revised: {response_data[\"data\"][0][\"revised_prompt\"]}\")
+                if response_data.get(\"error\"):
+                     logger.error(f\"API Error in response: {response_data[\"error\"]}\")
+                return _create_placeholder_image(\"Illustration generation failed (No URL). Check logs.\", error=True)
         else:
-            logger.error(f"Error generating illustration with gpt-image-1: {response.status_code}")
-            logger.error(f"Response: {response.text}")
+            logger.error(f\"Error generating illustration with gpt-image-1: {response.status_code}\")
+            logger.error(f\"Response: {response.text}\")
+            return _create_placeholder_image(f\"Illustration generation failed (HTTP {response.status_code}). Check logs.\", error=True)
         
-        # If attempt fails, create a placeholder image with the description
-        logger.warning("Creating placeholder image with description text")
-        placeholder_path = os.path.join(tempfile.gettempdir(), f'placeholder_{hash(description)}.jpg')
-        img = Image.new('RGB', (800, 600), color=(240, 240, 240))
-        from PIL import ImageDraw, ImageFont
-        d = ImageDraw.Draw(img)
-        
-        # Wrap text to fit in the image
-        import textwrap
-        wrapped_text = textwrap.fill(f"Illustration: {description}", width=40)
-        
-        # Draw the text
-        d.text((50, 50), wrapped_text, fill=(0, 0, 0))
-        img.save(placeholder_path)
-        
-        return placeholder_path
     except Exception as e:
-        logger.error(f"Error generating illustration: {str(e)}")
-        # Create a simple error placeholder
-        placeholder_path = os.path.join(tempfile.gettempdir(), f'error_placeholder_{hash(description)}.jpg')
-        img = Image.new('RGB', (800, 600), color=(255, 200, 200))
-        from PIL import ImageDraw
-        d = ImageDraw.Draw(img)
-        d.text((50, 50), f"Error generating illustration: {str(e)[:100]}", fill=(0, 0, 0))
-        img.save(placeholder_path)
-        
-        return placeholder_path
+        logger.error(f\"Error generating illustration: {str(e)}\")
+        return _create_placeholder_image(f\"Illustration generation failed: {str(e)[:100]}\", error=True)
 
 def extract_illustration_descriptions(story):
-    """Extract illustration descriptions from the story."""
+    \"\"\"Extract illustration descriptions from the story.\"\"\"
     import re
     
     # Find all illustration descriptions in the story
-    pattern = r'\[ILLUSTRATION: (.*?)\]'
+    pattern = r\"\[ILLUSTRATION: (.*?)\]\"
     matches = re.findall(pattern, story)
     
-    logger.info(f"Extracted {len(matches)} illustration descriptions from story")
+    logger.info(f\"Extracted {len(matches)} illustration descriptions from story\")
     return matches
+
