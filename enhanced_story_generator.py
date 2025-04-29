@@ -292,26 +292,45 @@ def generate_ghibli_style_image(image_data, api_key):
             response_data = response.json()
             logger.info(f"Ghibli image generation API response: {json.dumps(response_data)}") # Log the full response
 
-            # Get the image URL
-            if "data" in response_data and len(response_data["data"]) > 0 and "url" in response_data["data"][0]:
-                image_url = response_data["data"][0]["url"]
-
-                # Download the image
-                img_response = requests.get(image_url)
-                if img_response.status_code == 200:
+            # Check for image URL or base64 data
+            if "data" in response_data and len(response_data["data"]) > 0:
+                image_info = response_data["data"][0]
+                image_bytes = None
+                if "url" in image_info:
+                    image_url = image_info["url"]
+                    logger.info(f"Downloading Ghibli image from URL: {image_url}")
+                    img_response = requests.get(image_url)
+                    if img_response.status_code == 200:
+                        image_bytes = img_response.content
+                    else:
+                        logger.error(f"Error downloading Ghibli image: {img_response.status_code}")
+                        return _create_placeholder_image("Failed to download Ghibli-style image.", error=True)
+                elif "b64_json" in image_info:
+                    logger.info("Decoding Ghibli image from base64 data.")
+                    try:
+                        image_bytes = base64.b64decode(image_info["b64_json"])
+                    except Exception as decode_err:
+                        logger.error(f"Error decoding base64 image: {decode_err}")
+                        return _create_placeholder_image("Failed to decode Ghibli-style image data.", error=True)
+                
+                if image_bytes:
                     # Save the image to a temporary file
-                    image = Image.open(BytesIO(img_response.content))
-                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-                    image.save(temp_file.name)
-                    temp_file.close()
-
-                    logger.info(f"Successfully generated Ghibli-style image with gpt-image-1: {temp_file.name}")
-                    return temp_file.name
+                    try:
+                        image = Image.open(BytesIO(image_bytes))
+                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+                        image.save(temp_file.name)
+                        temp_file.close()
+                        logger.info(f"Successfully generated Ghibli-style image with gpt-image-1: {temp_file.name}")
+                        return temp_file.name
+                    except Exception as save_err:
+                        logger.error(f"Error saving generated Ghibli image: {save_err}")
+                        return _create_placeholder_image("Failed to save generated Ghibli-style image.", error=True)
                 else:
-                    logger.error(f"Error downloading Ghibli image: {img_response.status_code}")
-                    return _create_placeholder_image("Failed to download Ghibli-style image.", error=True)
+                    # This case should ideally not be reached if API response is valid
+                    logger.error("No image URL or base64 data found in the response item.")
+                    return _create_placeholder_image("Ghibli-style image generation failed (No data). Check logs.", error=True)
             else:
-                logger.error("No image URL found in the response")
+                logger.error("No data found in the image generation response")
                 # Check for content moderation flags
                 if response_data.get("data") and response_data["data"][0].get("revised_prompt"):
                      logger.warning(f"Prompt was revised: {response_data['data'][0]['revised_prompt']}")
@@ -396,6 +415,69 @@ def generate_illustration(description, api_key):
         return _create_placeholder_image(f"Illustration generation failed: {str(e)[:100]}", error=True)
 
 
+
+import re
+
+def extract_illustration_descriptions(story):
+    """Extract illustration descriptions from the story text."""
+    descriptions = re.findall(r'\[ILLUSTRATION: (.*?)\]', story)
+    logger.info(f"Extracted {len(descriptions)} illustration descriptions.")
+    return descriptions
+
+
+
+            # Check for image URL or base64 data
+            if "data" in response_data and len(response_data["data"]) > 0:
+                image_info = response_data["data"][0]
+                image_bytes = None
+                if "url" in image_info:
+                    image_url = image_info["url"]
+                    logger.info(f"Downloading illustration from URL: {image_url}")
+                    img_response = requests.get(image_url)
+                    if img_response.status_code == 200:
+                        image_bytes = img_response.content
+                    else:
+                        logger.error(f"Error downloading illustration: {img_response.status_code}")
+                        return _create_placeholder_image(f"Failed to download illustration: {description[:30]}...", error=True)
+                elif "b64_json" in image_info:
+                    logger.info("Decoding illustration from base64 data.")
+                    try:
+                        image_bytes = base64.b64decode(image_info["b64_json"])
+                    except Exception as decode_err:
+                        logger.error(f"Error decoding base64 illustration: {decode_err}")
+                        return _create_placeholder_image(f"Failed to decode illustration data: {description[:30]}...", error=True)
+                
+                if image_bytes:
+                    # Save the image to a temporary file
+                    try:
+                        image = Image.open(BytesIO(image_bytes))
+                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+                        image.save(temp_file.name)
+                        temp_file.close()
+                        logger.info(f"Successfully generated illustration: {temp_file.name}")
+                        return temp_file.name
+                    except Exception as save_err:
+                        logger.error(f"Error saving generated illustration: {save_err}")
+                        return _create_placeholder_image(f"Failed to save illustration: {description[:30]}...", error=True)
+                else:
+                    logger.error("No image URL or base64 data found in the illustration response item.")
+                    return _create_placeholder_image(f"Illustration generation failed (No data): {description[:30]}...", error=True)
+            else:
+                logger.error("No data found in the illustration generation response")
+                # Check for content moderation flags
+                if response_data.get("data") and response_data["data"][0].get("revised_prompt"):
+                     logger.warning(f"Prompt was revised: {response_data["data"][0]["revised_prompt"]}")
+                if response_data.get("error"):
+                     logger.error(f"API Error in response: {response_data["error"]}")
+                return _create_placeholder_image(f"Illustration generation failed (No data/URL). Check logs.", error=True)
+        else:
+            logger.error(f"Error generating illustration with gpt-image-1: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            return _create_placeholder_image(f"Illustration generation failed (HTTP {response.status_code}). Check logs.", error=True)
+
+    except Exception as e:
+        logger.error(f"Error generating illustration: {str(e)}")
+        return _create_placeholder_image(f"Illustration generation failed: {str(e)[:100]}", error=True)
 
 import re
 
