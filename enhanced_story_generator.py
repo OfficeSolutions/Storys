@@ -234,7 +234,7 @@ def generate_ghibli_style_image(image_data, api_key):
             "model": "gpt-image-1",
             "prompt": prompt,
             "n": 1,
-            "quality": "standard",
+            "quality": "low",
             "size": "1024x1024"
         }
         
