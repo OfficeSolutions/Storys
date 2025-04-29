@@ -67,7 +67,7 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         
         # Set up the data for the API request
         data = {
-            "model": "gpt-4",
+            "model": "gpt-4o",
             "messages": [
                 {
                     "role": "system",
