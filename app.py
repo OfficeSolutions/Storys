@@ -669,7 +669,7 @@ def generate():
             story_html = processed_html
         else:
             # Remove illustration placeholders if not generating
-            story_html = re.sub(r\[ILLUSTRATION: (.*?)\]\, \'\', story_text)
+            story_html = re.sub(r'\[ILLUSTRATION: (.*?)\]', '', story_text)
 
         # Store the final HTML (with illustrations or removed placeholders)
         stories[story_id]["story_html_final"] = story_html
