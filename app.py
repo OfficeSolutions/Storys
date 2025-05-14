@@ -662,7 +662,7 @@ def generate():
                     if i < len(generated_illustration_paths_urls) and generated_illustration_paths_urls[i]:
                         processed_html += f'<div class="illustration"><img src="{generated_illustration_paths_urls[i]}" alt="Illustration: {original_desc_text}" class="illustration-image"><p class="text-muted"><em>{original_desc_text}</em></p></div>'
                     else:
-                        processed_html += f'<div class="illustration"><p class="text-danger"><em>Illustration for \"{original_desc_text}\" could not be generated.</em></p></div>'
+                        processed_html += f'<div class="illustration"><p class="text-danger"><em>Illustration for "{original_desc_text}" could not be generated.</em></p></div>'
                     processed_html += rest_of_story
                 except IndexError:
                     processed_html += part # Append the remainder if parsing fails
@@ -698,7 +698,7 @@ def show_story(story_id):
         image_path=story_data["image_path"],
         rhyming=story_data.get("rhyming", False)
     )
-    return render_template_string(MAIN_TEMPLATE, content=content, page_title=f"{story_data["child_name"]}\'s Story - Storybook Magic")
+    return render_template_string(MAIN_TEMPLATE, content=content, page_title=f"{story_data['child_name']}\'s Story - Storybook Magic")
 
 @app.route("/image/<story_id>/<filename>")
 def get_uploaded_image(story_id, filename):
