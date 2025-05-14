@@ -16,7 +16,7 @@ from enhanced_story_generator import (
 )
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format=\'%(asctime)s - %(levelname)s - %(message)s\')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -348,7 +348,7 @@ UPLOAD_TEMPLATE = """
 <div class="hero-section text-center mb-5">
     <div class="container">
         <h1 class="display-4 fw-bold mb-3">Create Magical Bedtime Stories</h1>
-        <p class="lead mb-4">Upload a photo of your child and we\'ll create a personalized bedtime story featuring them as the main character!</p>
+        <p class="lead mb-4">Upload a photo of your child and we\"ll create a personalized bedtime story featuring them as the main character!</p>
         <a href="#create-story" class="btn btn-primary btn-lg px-4">Get Started</a>
     </div>
 </div>
@@ -387,13 +387,13 @@ UPLOAD_TEMPLATE = """
     <h2 class="text-center mb-4">Create Your Personalized Story</h2>
     <form action="/generate" method="post" enctype="multipart/form-data">
         <div class="mb-3">
-            <label for="child_name" class="form-label">Child\'s Name</label>
+            <label for="child_name" class="form-label">Child\"s Name</label>
             <input type="text" class="form-control" id="child_name" name="child_name" required>
         </div>
         <div class="mb-3">
             <label for="child_image" class="form-label">Upload a Photo</label>
             <input type="file" class="form-control" id="child_image" name="child_image" accept="image/*" required>
-            <div class="form-text">We\'ll use this photo to personalize the story.</div>
+            <div class="form-text">We\"ll use this photo to personalize the story.</div>
         </div>
         <div class="mb-3">
             <label for="age_range" class="form-label">Age Range</label>
@@ -465,7 +465,7 @@ UPLOAD_TEMPLATE = """
         const childName = document.getElementById("child_name").value;
         const childImage = document.getElementById("child_image").files;
         if (!childName.trim()) {
-            alert("Please enter the child\'s name.");
+            alert("Please enter the child\"s name.");
             event.preventDefault();
             return;
         }
@@ -559,7 +559,7 @@ STORY_TEMPLATE = """
                         console.log("Thanks for sharing!");
                     }).catch(console.error);
                 } else {
-                    // Fallback for browsers that don\'t support navigator.share
+                    // Fallback for browsers that don\"t support navigator.share
                     alert("Sharing is not supported on this browser, but you can copy the URL!");
                 }
             });
@@ -669,7 +669,7 @@ def generate():
             story_html = processed_html
         else:
             # Remove illustration placeholders if not generating
-            story_html = re.sub(r\'\[ILLUSTRATION: (.*?)\]\', \'\', story_text)
+            story_html = re.sub(r\[ILLUSTRATION: (.*?)\]\, \'\', story_text)
 
         # Store the final HTML (with illustrations or removed placeholders)
         stories[story_id]["story_html_final"] = story_html
