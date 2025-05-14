@@ -5,6 +5,7 @@ import base64
 import uuid
 import urllib.parse
 import logging
+import re # Added re import
 from flask import Flask, render_template_string, request, redirect, url_for, send_file, abort
 from werkzeug.utils import secure_filename
 from enhanced_story_generator import (
@@ -15,11 +16,11 @@ from enhanced_story_generator import (
 )
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format=\'%(asctime)s - %(levelname)s - %(message)s\')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max upload size
 
 # In-memory storage for stories and images
 stories = {}
@@ -28,7 +29,7 @@ illustration_images = {}
 def encode_image(image_path):
     """Encode an image to base64."""
     with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
+        return base64.b64encode(image_file.read()).decode("utf-8")
 
 # HTML template for the main layout
 MAIN_TEMPLATE = """
@@ -37,7 +38,7 @@ MAIN_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ page_title|default('Storybook Magic') }}</title>
+    <title>{{ page_title|default("Storybook Magic") }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <style>
@@ -51,7 +52,7 @@ MAIN_TEMPLATE = """
         }
         
         body {
-            font-family: 'Nunito', sans-serif;
+            font-family: "Nunito", sans-serif;
             background-color: var(--background-color);
             color: var(--dark-color);
             line-height: 1.6;
@@ -342,11 +343,12 @@ MAIN_TEMPLATE = """
 
 # HTML template for the upload page
 UPLOAD_TEMPLATE = """
+{% extends "main_layout" %}
 {% block content %}
 <div class="hero-section text-center mb-5">
     <div class="container">
         <h1 class="display-4 fw-bold mb-3">Create Magical Bedtime Stories</h1>
-        <p class="lead mb-4">Upload a photo of your child and we'll create a personalized bedtime story featuring them as the main character!</p>
+        <p class="lead mb-4">Upload a photo of your child and we\'ll create a personalized bedtime story featuring them as the main character!</p>
         <a href="#create-story" class="btn btn-primary btn-lg px-4">Get Started</a>
     </div>
 </div>
@@ -385,13 +387,13 @@ UPLOAD_TEMPLATE = """
     <h2 class="text-center mb-4">Create Your Personalized Story</h2>
     <form action="/generate" method="post" enctype="multipart/form-data">
         <div class="mb-3">
-            <label for="child_name" class="form-label">Child's Name</label>
+            <label for="child_name" class="form-label">Child\'s Name</label>
             <input type="text" class="form-control" id="child_name" name="child_name" required>
         </div>
         <div class="mb-3">
             <label for="child_image" class="form-label">Upload a Photo</label>
             <input type="file" class="form-control" id="child_image" name="child_image" accept="image/*" required>
-            <div class="form-text">We'll use this photo to personalize the story.</div>
+            <div class="form-text">We\'ll use this photo to personalize the story.</div>
         </div>
         <div class="mb-3">
             <label for="age_range" class="form-label">Age Range</label>
@@ -458,29 +460,33 @@ UPLOAD_TEMPLATE = """
 {% block extra_js %}
 <script>
     // Form validation
-    document.addEventListener('DOMContentLoaded', function() {
-        const form = document.querySelector('form');
-        form.addEventListener('submit', function(event) {
-            const childName = document.getElementById('child_name').value;
-            const childImage = document.getElementById('child_image').files[0];
-            
-            if (!childName || !childImage) {
-                event.preventDefault();
-                alert('Please fill in all required fields.');
-            }
-        });
+    const form = document.querySelector("form");
+    form.addEventListener("submit", function(event) {
+        const childName = document.getElementById("child_name").value;
+        const childImage = document.getElementById("child_image").files;
+        if (!childName.trim()) {
+            alert("Please enter the child\'s name.");
+            event.preventDefault();
+            return;
+        }
+        if (childImage.length === 0) {
+            alert("Please upload a photo of the child.");
+            event.preventDefault();
+            return;
+        }
     });
 </script>
 {% endblock %}
 """
 
-# HTML template for the story page with 3D book
+# HTML template for the story page
 STORY_TEMPLATE = """
+{% extends "main_layout" %}
 {% block content %}
 <div class="story-container">
     <div class="row mb-4">
         <div class="col-md-8">
-            <h1 class="mb-3">{{ child_name }}'s {{ theme|title }} Story</h1>
+            <h1 class="mb-3">{{ child_name }}\'s {{ theme|title }} Story</h1>
             <div class="d-flex gap-2 mb-4">
                 <span class="badge bg-primary">{{ theme|title }}</span>
                 <span class="badge bg-secondary">Age: {{ age_range }}</span>
@@ -508,7 +514,7 @@ STORY_TEMPLATE = """
             <div class="book-container">
                 <div class="book">
                     <div class="book-front">
-                        <div class="book-title">{{ child_name }}'s {{ theme|title }} Adventure</div>
+                        <div class="book-title">{{ child_name }}\'s {{ theme|title }} Adventure</div>
                         <div class="book-author">A Personalized Story for Ages {{ age_range }}</div>
                         <img src="{{ image_path }}" alt="{{ child_name }}" class="book-cover-image">
                         <p>Hover to open the book</p>
@@ -531,254 +537,201 @@ STORY_TEMPLATE = """
 
 {% block extra_js %}
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        // Print functionality
-        const printBtn = document.querySelector('.print-story');
-        printBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            window.print();
-        });
-        
-        // Share functionality (placeholder)
-        const shareBtn = document.querySelector('.share-story');
-        shareBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            alert('Sharing functionality coming soon!');
-        });
-        
-        // 3D Book animation
-        const book = document.querySelector('.book');
-        let rotationY = -30;
-        let rotationX = 0;
-        
-        // Automatic gentle rotation
-        setInterval(() => {
-            rotationY = -30 + Math.sin(Date.now() / 2000) * 10;
-            rotationX = Math.sin(Date.now() / 3000) * 5;
-            book.style.transform = `rotateY(${rotationY}deg) rotateX(${rotationX}deg)`;
-        }, 50);
-        
-        // Reset rotation on hover
-        book.addEventListener('mouseenter', function() {
-            book.style.transform = 'rotateY(0deg) rotateX(0deg)';
-        });
-        
-        book.addEventListener('mouseleave', function() {
-            // Resume automatic rotation
-        });
-        
-        // Ensure all images are loaded
-        const images = document.querySelectorAll('.illustration-image');
-        images.forEach(img => {
-            img.addEventListener('error', function() {
-                this.src = '/static/placeholder.jpg';
-                this.alt = 'Image could not be loaded';
+    document.addEventListener("DOMContentLoaded", function() {
+        const printButton = document.querySelector(".print-story");
+        if (printButton) {
+            printButton.addEventListener("click", function(event) {
+                event.preventDefault();
+                window.print();
             });
-        });
+        }
+
+        const shareButton = document.querySelector(".share-story");
+        if (shareButton) {
+            shareButton.addEventListener("click", function(event) {
+                event.preventDefault();
+                if (navigator.share) {
+                    navigator.share({
+                        title: document.title,
+                        text: "Check out this personalized story I created!",
+                        url: window.location.href
+                    }).then(() => {
+                        console.log("Thanks for sharing!");
+                    }).catch(console.error);
+                } else {
+                    // Fallback for browsers that don\'t support navigator.share
+                    alert("Sharing is not supported on this browser, but you can copy the URL!");
+                }
+            });
+        }
     });
 </script>
 {% endblock %}
 """
 
-@app.route('/')
-def home():
-    """Render the home page."""
-    # Use a simpler approach to render templates
-    template = render_template_string(UPLOAD_TEMPLATE, page_title="Create Your Story | Storybook Magic")
-    return render_template_string(MAIN_TEMPLATE, content=template)
+@app.route("/")
+def index():
+    content = render_template_string(UPLOAD_TEMPLATE)
+    return render_template_string(MAIN_TEMPLATE, content=content, page_title="Create Your Story - Storybook Magic")
 
-@app.route('/generate', methods=['POST'])
+@app.route("/generate", methods=["POST"])
 def generate():
-    """Generate a personalized story based on the uploaded image."""
     try:
-        child_name = request.form.get('child_name', '')
-        theme = request.form.get('theme', 'adventure')
-        age_range = request.form.get('age_range', '4-6')
-        generate_illustrations = request.form.get('generate_illustrations') == 'true'
-        rhyming = request.form.get('rhyming') == 'true'
-        
-        logger.info(f"Generating story for {child_name}, theme: {theme}, age: {age_range}, illustrations: {generate_illustrations}, rhyming: {rhyming}")
-        
-        # Check if an image was uploaded
-        if 'child_image' not in request.files or request.files['child_image'].filename == '':
-            logger.error("No image uploaded")
-            return "No image uploaded", 400
-        
-        # Save the uploaded image to a temporary file
-        image_file = request.files['child_image']
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-        image_file.save(temp_file.name)
-        temp_file.close()
-        temp_path = temp_file.name
-        
-        # Encode the image to base64
-        image_data = encode_image(temp_path)
-        
-        # Get API key from environment variable
-        api_key = os.environ.get('OPENAI_API_KEY')
+        child_name = request.form["child_name"]
+        child_image_file = request.files["child_image"]
+        age_range = request.form["age_range"]
+        theme = request.form["theme"]
+        generate_illustrations_flag = request.form.get("generate_illustrations") == "true"
+        rhyming_flag = request.form.get("rhyming") == "true"
+
+        if not child_image_file or child_image_file.filename == "":
+            return "No image file provided", 400
+
+        filename = secure_filename(child_image_file.filename if child_image_file.filename else "uploaded_image")
+        temp_dir = tempfile.mkdtemp()
+        image_path = os.path.join(temp_dir, filename)
+        child_image_file.save(image_path)
+
+        with open(image_path, "rb") as f:
+            image_data_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            logger.error("OPENAI_API_KEY environment variable not set")
-            return "API key not configured", 500
-        
-        # Generate a Ghibli-style main image
-        ghibli_image_path = generate_ghibli_style_image(image_data, api_key)
+            logger.error("OPENAI_API_KEY environment variable not set.")
+            return "Server configuration error: API key not set.", 500
+
+        # Generate Ghibli-style image for the cover
+        ghibli_image_path = generate_ghibli_style_image(image_data_base64, api_key)
         if not ghibli_image_path:
-            logger.warning("Failed to generate Ghibli-style image, using original image")
-            ghibli_image_path = temp_path
-        
-        # Generate the story
-        story = generate_story(child_name, image_data, theme, age_range, generate_illustrations, rhyming)
-        
-        # Store the story and image path
-        story_id = str(int(time.time()))
-        stories[story_id] = {
-            'story': story,
-            'image_path': ghibli_image_path,  # Use the Ghibli-style image
-            'original_image_path': temp_path,  # Keep the original image as backup
-            'child_name': child_name,
-            'theme': theme,
-            'age_range': age_range,
-            'generate_illustrations': generate_illustrations,
-            'rhyming': rhyming
-        }
-        
-        # Generate illustrations if requested
-        if generate_illustrations:
-            # Extract illustration descriptions from the story
-            descriptions = extract_illustration_descriptions(story)
-            
-            # Generate images for each description
-            illustration_images[story_id] = []
-            for desc in descriptions:
-                # Generate image using OpenAI
-                image_path = generate_illustration(desc, theme)
-                
-                if image_path:
-                    # Create a unique ID for this illustration
-                    illustration_id = str(uuid.uuid4())
-                    illustration_images[story_id].append({
-                        'id': illustration_id,
-                        'description': desc,
-                        'image_path': image_path
-                    })
-        
-        return redirect(url_for('view_story', story_id=story_id))
-    except Exception as e:
-        logger.error(f"Error in generate route: {str(e)}")
-        return f"An error occurred: {str(e)}", 500
+            logger.warning("Failed to generate Ghibli-style image, using original image as fallback.")
+            ghibli_image_path = image_path # Fallback to original if Ghibli fails
 
-@app.route('/story/<story_id>')
-def view_story(story_id):
-    """View a generated story."""
-    try:
-        if story_id not in stories:
-            logger.error(f"Story not found: {story_id}")
-            return "Story not found", 404
-        
-        story_data = stories[story_id]
-        generate_illustrations = story_data.get('generate_illustrations', False)
-        rhyming = story_data.get('rhyming', False)
-        
-        # Process the story to highlight illustration descriptions or replace with actual images
-        story_html = story_data['story']
-        
-        if generate_illustrations and story_id in illustration_images:
-            # Replace illustration descriptions with actual images
-            for illustration in illustration_images[story_id]:
-                desc = illustration['description']
-                illustration_id = illustration['id']
-                img_url = f"/illustration/{story_id}/{illustration_id}"
-                img_tag = f'<div class="illustration"><img src="{img_url}" alt="{desc}" class="illustration-image" onerror="this.src=\'/static/placeholder.jpg\'; this.alt=\'Image could not be loaded\'"><p><i class="bi bi-image me-2"></i>{desc}</p></div>'
-                story_html = story_html.replace(f'[ILLUSTRATION: {desc}]', img_tag)
-        else:
-            # Just highlight the illustration descriptions
-            story_html = story_html.replace('[ILLUSTRATION:', '<div class="illustration"><i class="bi bi-image me-2"></i>[ILLUSTRATION:')
-            story_html = story_html.replace(']', ']</div>')
-        
-        # Replace paragraphs with proper HTML
-        story_html = story_html.replace('\n\n', '</p><p>')
-        story_html = f'<p>{story_html}</p>'
-        
-        # Use a simpler approach to render templates
-        template = render_template_string(
-            STORY_TEMPLATE,
-            story_html=story_html,
-            image_path=f"/image/{story_id}",
-            child_name=story_data['child_name'],
-            theme=story_data['theme'],
-            age_range=story_data['age_range'],
-            rhyming=rhyming,
-            page_title=f"{story_data['child_name']}'s Story | Storybook Magic"
+        story_text = generate_story(
+            child_name, 
+            image_data_base64, 
+            theme, 
+            age_range, 
+            generate_illustrations_flag,
+            rhyming_flag
         )
-        
-        return render_template_string(MAIN_TEMPLATE, content=template)
+
+        story_id = str(uuid.uuid4())
+        stories[story_id] = {
+            "child_name": child_name,
+            "theme": theme,
+            "age_range": age_range,
+            "story_text": story_text, # Store raw story text with placeholders
+            "image_path": url_for("get_uploaded_image", story_id=story_id, filename=os.path.basename(ghibli_image_path)),
+            "original_image_path": image_path, # Store path to original for Ghibli fallback
+            "ghibli_image_path": ghibli_image_path, # Store path to Ghibli image
+            "generate_illustrations": generate_illustrations_flag,
+            "rhyming": rhyming_flag
+        }
+
+        # Generate illustrations if requested and replace placeholders
+        story_html = story_text # Start with the raw story text
+        if generate_illustrations_flag:
+            illustration_descriptions = extract_illustration_descriptions(story_text)
+            generated_illustration_paths_urls = [] # URLs for the template
+            
+            if not api_key: # This check is redundant if already checked above, but good for safety
+                logger.error("OPENAI_API_KEY not found for illustrations. Cannot generate.")
+            else:
+                for i, desc in enumerate(illustration_descriptions):
+                    logger.info(f"Requesting illustration for: {desc}")
+                    # Corrected call: Pass api_key, not theme
+                    illustration_path = generate_illustration(desc, api_key) 
+                    if illustration_path:
+                        img_id = f"{story_id}_illustration_{i}"
+                        illustration_images[img_id] = illustration_path # Store the actual file path
+                        generated_illustration_paths_urls.append(url_for("get_illustration_image", image_id=img_id))
+                        logger.info(f"Illustration {i} generated: {illustration_path}, URL: {generated_illustration_paths_urls[-1]}")
+                    else:
+                        generated_illustration_paths_urls.append(None)
+                        logger.warning(f"Failed to generate illustration for: {desc}")
+
+            # Replace placeholders in story with actual image tags or placeholders
+            story_html_parts = story_text.split("[ILLUSTRATION:")
+            processed_html = story_html_parts[0]
+            for i, part in enumerate(story_html_parts[1:]):
+                try:
+                    desc_and_rest = part.split("]", 1)
+                    original_desc_text = desc_and_rest[0]
+                    rest_of_story = desc_and_rest[1]
+                    
+                    if i < len(generated_illustration_paths_urls) and generated_illustration_paths_urls[i]:
+                        processed_html += f'<div class="illustration"><img src="{generated_illustration_paths_urls[i]}" alt="Illustration: {original_desc_text}" class="illustration-image"><p class="text-muted"><em>{original_desc_text}</em></p></div>'
+                    else:
+                        processed_html += f'<div class="illustration"><p class="text-danger"><em>Illustration for \"{original_desc_text}\" could not be generated.</em></p></div>'
+                    processed_html += rest_of_story
+                except IndexError:
+                    processed_html += part # Append the remainder if parsing fails
+            story_html = processed_html
+        else:
+            # Remove illustration placeholders if not generating
+            story_html = re.sub(r\'\[ILLUSTRATION: (.*?)\]\', \'\', story_text)
+
+        # Store the final HTML (with illustrations or removed placeholders)
+        stories[story_id]["story_html_final"] = story_html
+
+        return redirect(url_for("show_story", story_id=story_id))
+
     except Exception as e:
-        logger.error(f"Error in view_story route: {str(e)}")
+        logger.error(f"Error in /generate: {str(e)}", exc_info=True)
+        # You might want to render an error page here
         return f"An error occurred: {str(e)}", 500
 
-@app.route('/image/<story_id>')
-def get_image(story_id):
-    """Serve the image associated with a story."""
-    try:
-        if story_id not in stories:
-            logger.error(f"Story not found for image: {story_id}")
-            return "Story not found", 404
-        
-        # Use the Ghibli-style image if available, otherwise fall back to original
-        image_path = stories[story_id]['image_path']
-        if not os.path.exists(image_path):
-            logger.warning(f"Image not found at {image_path}, using original")
-            image_path = stories[story_id]['original_image_path']
-            
-        return send_file(image_path)
-    except Exception as e:
-        logger.error(f"Error in get_image route: {str(e)}")
-        return "Image not available", 404
+@app.route("/story/<story_id>")
+def show_story(story_id):
+    story_data = stories.get(story_id)
+    if not story_data:
+        abort(404)
+    
+    story_html_final = story_data.get("story_html_final", story_data["story_text"]) # Fallback to raw if not processed
 
-@app.route('/illustration/<story_id>/<illustration_id>')
-def get_illustration(story_id, illustration_id):
-    """Serve an illustration image using a unique ID instead of description."""
-    try:
-        if story_id not in illustration_images:
-            logger.error(f"Illustrations not found for story: {story_id}")
-            return "Illustration not found", 404
-        
-        for illustration in illustration_images[story_id]:
-            if illustration['id'] == illustration_id:
-                image_path = illustration['image_path']
-                if os.path.exists(image_path):
-                    return send_file(image_path)
-                else:
-                    logger.error(f"Illustration file not found: {image_path}")
-                    return "Illustration file not found", 404
-        
-        logger.error(f"Illustration ID not found: {illustration_id}")
-        return "Illustration not found", 404
-    except Exception as e:
-        logger.error(f"Error in get_illustration route: {str(e)}")
-        return "Illustration not available", 404
+    content = render_template_string(
+        STORY_TEMPLATE, 
+        child_name=story_data["child_name"],
+        theme=story_data["theme"],
+        age_range=story_data["age_range"],
+        story_html=story_html_final,
+        image_path=story_data["image_path"],
+        rhyming=story_data.get("rhyming", False)
+    )
+    return render_template_string(MAIN_TEMPLATE, content=content, page_title=f"{story_data["child_name"]}\'s Story - Storybook Magic")
 
-# Create a static directory for placeholder images
-@app.route('/static/<filename>')
-def static_files(filename):
-    """Serve static files."""
-    try:
-        if filename == 'placeholder.jpg':
-            # Return a simple placeholder image
-            placeholder_path = os.path.join(tempfile.gettempdir(), 'placeholder.jpg')
-            if not os.path.exists(placeholder_path):
-                from PIL import Image, ImageDraw, ImageFont
-                img = Image.new('RGB', (400, 300), color=(200, 200, 200))
-                d = ImageDraw.Draw(img)
-                d.text((150, 150), "Image not available", fill=(0, 0, 0))
-                img.save(placeholder_path)
-            return send_file(placeholder_path)
-        return "File not found", 404
-    except Exception as e:
-        logger.error(f"Error in static_files route: {str(e)}")
-        return "File not available", 404
+@app.route("/image/<story_id>/<filename>")
+def get_uploaded_image(story_id, filename):
+    story_data = stories.get(story_id)
+    if not story_data:
+        abort(404)
+    # Determine if it's the Ghibli image or the original upload
+    # The filename in image_path is already the basename of the Ghibli image (or original if Ghibli failed)
+    image_to_serve = story_data.get("ghibli_image_path")
+    if not image_to_serve or os.path.basename(image_to_serve) != filename:
+        # This case should ideally not happen if image_path is set correctly
+        # but as a fallback, try original if ghibli_image_path is missing or filename doesn't match
+        image_to_serve = story_data.get("original_image_path")
+        if not image_to_serve or os.path.basename(image_to_serve) != filename:
+             abort(404)
 
-if __name__ == '__main__':
-    # Use the PORT environment variable provided by Render
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    if not os.path.exists(image_to_serve):
+        logger.error(f"Image file not found: {image_to_serve}")
+        abort(404)
+    return send_file(image_to_serve)
+
+@app.route("/illustration/<image_id>")
+def get_illustration_image(image_id):
+    image_path = illustration_images.get(image_id)
+    if not image_path or not os.path.exists(image_path):
+        logger.error(f"Illustration image not found for ID: {image_id}, Path: {image_path}")
+        abort(404)
+    return send_file(image_path)
+
+if __name__ == "__main__":
+    # Ensure OPENAI_API_KEY is set
+    if not os.environ.get("OPENAI_API_KEY"):
+        print("Error: OPENAI_API_KEY environment variable not set.")
+        exit(1)
+    app.run(host="0.0.0.0", port=10000, debug=False)
+
