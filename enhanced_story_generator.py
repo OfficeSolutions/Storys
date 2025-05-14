@@ -214,8 +214,7 @@ def generate_ghibli_style_image(image_data, api_key):
             "prompt": prompt,
             "n": 1,
             "quality": "low", # Using low quality as requested
-            "size": "1024x1024",
-            "response_format": "b64_json" # Explicitly request base64
+            "size": "1024x1024"
         }
         logger.info("Sending Ghibli image generation request to OpenAI API (gpt-image-1)")
         response = requests.post(
@@ -287,8 +286,7 @@ def generate_illustration(description, api_key):
             "prompt": description,
             "n": 1,
             "quality": "low", # Using low quality as requested
-            "size": "1024x1024",
-            "response_format": "b64_json" # Explicitly request base64
+            "size": "1024x1024"
         }
         logger.info("Sending illustration generation request to OpenAI API (gpt-image-1)")
         response = requests.post(
