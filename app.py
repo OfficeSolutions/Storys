@@ -294,6 +294,7 @@ MAIN_TEMPLATE = """
             }
         }
     </style>
+    {% block extra_css %}{% endblock %}
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-light">
@@ -337,14 +338,13 @@ MAIN_TEMPLATE = """
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    {% block extra_js %}{% endblock %}
 </body>
 </html>
 """
 
 # HTML template for the upload page
 UPLOAD_TEMPLATE = """
-{% extends "main_layout" %}
-{% block content %}
 <div class="hero-section text-center mb-5">
     <div class="container">
         <h1 class="display-4 fw-bold mb-3">Create Magical Bedtime Stories</h1>
@@ -455,9 +455,6 @@ UPLOAD_TEMPLATE = """
         </div>
     </div>
 </div>
-{% endblock %}
-
-{% block extra_js %}
 <script>
     // Form validation
     const form = document.querySelector("form");
@@ -476,17 +473,14 @@ UPLOAD_TEMPLATE = """
         }
     });
 </script>
-{% endblock %}
 """
 
 # HTML template for the story page
 STORY_TEMPLATE = """
-{% extends "main_layout" %}
-{% block content %}
 <div class="story-container">
     <div class="row mb-4">
         <div class="col-md-8">
-            <h1 class="mb-3">{{ child_name }}\'s {{ theme|title }} Story</h1>
+            <h1 class="mb-3">{{ child_name }}\\'s {{ theme|title }} Story</h1>
             <div class="d-flex gap-2 mb-4">
                 <span class="badge bg-primary">{{ theme|title }}</span>
                 <span class="badge bg-secondary">Age: {{ age_range }}</span>
@@ -514,7 +508,7 @@ STORY_TEMPLATE = """
             <div class="book-container">
                 <div class="book">
                     <div class="book-front">
-                        <div class="book-title">{{ child_name }}\'s {{ theme|title }} Adventure</div>
+                        <div class="book-title">{{ child_name }}\\'s {{ theme|title }} Adventure</div>
                         <div class="book-author">A Personalized Story for Ages {{ age_range }}</div>
                         <img src="{{ image_path }}" alt="{{ child_name }}" class="book-cover-image">
                         <p>Hover to open the book</p>
@@ -533,9 +527,6 @@ STORY_TEMPLATE = """
         </div>
     </div>
 </div>
-{% endblock %}
-
-{% block extra_js %}
 <script>
     document.addEventListener("DOMContentLoaded", function() {
         const printButton = document.querySelector(".print-story");
@@ -566,12 +557,13 @@ STORY_TEMPLATE = """
         }
     });
 </script>
-{% endblock %}
 """
 
 @app.route("/")
 def index():
+    # Pass UPLOAD_TEMPLATE content directly to MAIN_TEMPLATE
     content = render_template_string(UPLOAD_TEMPLATE)
+    # Also pass any specific JS for UPLOAD_TEMPLATE if needed, or ensure it's self-contained
     return render_template_string(MAIN_TEMPLATE, content=content, page_title="Create Your Story - Storybook Magic")
 
 @app.route("/generate", methods=["POST"])
@@ -689,6 +681,7 @@ def show_story(story_id):
     
     story_html_final = story_data.get("story_html_final", story_data["story_text"]) # Fallback to raw if not processed
 
+    # Pass STORY_TEMPLATE content directly to MAIN_TEMPLATE
     content = render_template_string(
         STORY_TEMPLATE, 
         child_name=story_data["child_name"],
@@ -698,6 +691,7 @@ def show_story(story_id):
         image_path=story_data["image_path"],
         rhyming=story_data.get("rhyming", False)
     )
+    # Also pass any specific JS for STORY_TEMPLATE if needed, or ensure it's self-contained
     return render_template_string(MAIN_TEMPLATE, content=content, page_title=f"{story_data['child_name']}\'s Story - Storybook Magic")
 
 @app.route("/image/<story_id>/<filename>")
