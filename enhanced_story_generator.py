@@ -54,16 +54,16 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
             raise ValueError("OPENAI_API_KEY environment variable not set")
 
         if age_range == "2-4":
-            complexity = "very simple with short sentences, basic vocabulary, and a straightforward plot. Length should be around 800-1000 words."
+            complexity = "extremely simple with very short sentences (3-5 words), basic everyday vocabulary (e.g., common nouns and verbs), and a very straightforward, linear plot with minimal characters. Focus on repetition and clear actions. Length should be around 300-500 words."
             reading_level = "toddlers and preschoolers (2-4 years old)"
         elif age_range == "4-6":
-            complexity = "simple but engaging with slightly longer sentences and a clear plot. Length should be around 1000-1500 words."
+            complexity = "simple and engaging, with clear, concise sentences (5-8 words), common vocabulary suitable for young children, and a straightforward plot. Focus on clear actions and a positive message. Length should be around 500-800 words."
             reading_level = "kindergarteners (4-6 years old)"
         elif age_range == "6-8":
-            complexity = "moderately complex with varied sentence structures, richer vocabulary, and a more developed plot. Length should be around 1500-2000 words."
+            complexity = "moderately complex with varied sentence structures, richer vocabulary, and a more developed plot. Length should be around 800-1200 words."
             reading_level = "early elementary school children (6-8 years old)"
         else:  # 8-10
-            complexity = "more complex with longer paragraphs, advanced vocabulary, and a multi-layered plot. Length should be around 2000-2500 words."
+            complexity = "more complex with longer paragraphs, advanced vocabulary, and a multi-layered plot. Length should be around 1200-1500 words."
             reading_level = "older elementary school children (8-10 years old)"
 
         child_description = analyze_image(image_data, api_key)
@@ -204,7 +204,7 @@ def generate_ghibli_style_image(image_data, api_key):
     try:
         logger.info("Generating Ghibli-style main image")
         child_description = analyze_image(image_data, api_key)
-        prompt = f"Create a Studio Ghibli style illustration of a child who looks like: {child_description}. The image should have the magical, whimsical quality of Ghibli films, with soft colors, detailed backgrounds, and a sense of wonder. Make it appropriate for a children's book cover."
+        prompt = f"A heartwarming Studio Ghibli style illustration suitable for a children's book cover. The scene features a child character inspired by the following description: {child_description}. Emphasize a magical, whimsical atmosphere with soft colors, enchanting details, and a sense of gentle wonder. Ensure the depiction is innocent and universally appealing."
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
@@ -268,7 +268,16 @@ def generate_ghibli_style_image(image_data, api_key):
         else:
             logger.error(f"Error generating Ghibli image: {response.status_code}")
             logger.error(f"Response: {response.text}")
-            return _create_placeholder_image(f"Ghibli-style image generation failed (HTTP {response.status_code}). Check logs.", error=True)
+            placeholder_text = f"Ghibli-style image generation failed (HTTP {response.status_code}). The original image will be used."
+            try:
+                response_data = response.json()
+                error_message_from_api = response_data.get("error", {}).get("message", "")
+                if "safety system" in error_message_from_api.lower():
+                    logger.warning(f"Ghibli image rejected by safety system: {error_message_from_api}")
+                    placeholder_text = "The Ghibli-style image was not created due to content safety guidelines. The original image will be used instead."
+            except json.JSONDecodeError:
+                logger.warning("Could not parse JSON from error response for Ghibli image.")
+            return _create_placeholder_image(placeholder_text, error=True)
     except Exception as e:
         logger.error(f"Error generating Ghibli-style image: {str(e)}")
         return _create_placeholder_image(f"Ghibli-style image generation failed: {str(e)[:100]}", error=True)
