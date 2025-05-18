@@ -456,7 +456,7 @@ UPLOAD_TEMPLATE = """
     </div>
 </div>
 <script>
-    // Form validation
+    // Form validation and progress bar handling
     const form = document.querySelector("form");
     form.addEventListener("submit", function(event) {
         const childName = document.getElementById("child_name").value;
@@ -471,7 +471,209 @@ UPLOAD_TEMPLATE = """
             event.preventDefault();
             return;
         }
+        
+        // Show progress modal
+        event.preventDefault();
+        showProgressModal();
+        
+        // Submit form via AJAX
+        const formData = new FormData(form);
+        const xhr = new XMLHttpRequest();
+        
+        xhr.open("POST", "/generate", true);
+        
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                if (xhr.status === 200) {
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        if (response.redirect) {
+                            window.location.href = response.redirect;
+                        }
+                    } catch (e) {
+                        // If response is not JSON, it might be a redirect
+                        window.location.href = xhr.responseURL || "/";
+                    }
+                } else {
+                    hideProgressModal();
+                    alert("An error occurred while generating your story. Please try again.");
+                }
+            }
+        };
+        
+        xhr.send(formData);
+        startProgressUpdates();
     });
+    
+    // Progress modal functions
+    function showProgressModal() {
+        // Create modal if it doesn't exist
+        if (!document.getElementById("storyProgressModal")) {
+            const modalHtml = `
+                <div class="modal fade" id="storyProgressModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="storyProgressModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="storyProgressModalLabel">Creating Your Story</h5>
+                            </div>
+                            <div class="modal-body">
+                                <p id="progressStepText">Uploading and processing image...</p>
+                                <div class="progress" style="height: 25px;">
+                                    <div id="storyProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 10%;" aria-valuenow="10" aria-valuemin="0" aria-valuemax="100">10%</div>
+                                </div>
+                                <div class="mt-4">
+                                    <div class="d-flex align-items-center mb-2">
+                                        <div class="step-indicator completed me-2"><i class="bi bi-check-circle-fill text-success"></i></div>
+                                        <span>Preparing your story</span>
+                                    </div>
+                                    <div class="d-flex align-items-center mb-2">
+                                        <div class="step-indicator active me-2"><i class="bi bi-arrow-right-circle-fill text-primary"></i></div>
+                                        <span id="currentStepText">Analyzing image</span>
+                                    </div>
+                                    <div class="d-flex align-items-center mb-2">
+                                        <div class="step-indicator me-2"><i class="bi bi-circle text-secondary"></i></div>
+                                        <span>Creating story</span>
+                                    </div>
+                                    <div class="d-flex align-items-center mb-2">
+                                        <div class="step-indicator me-2"><i class="bi bi-circle text-secondary"></i></div>
+                                        <span>Generating illustrations</span>
+                                    </div>
+                                    <div class="d-flex align-items-center">
+                                        <div class="step-indicator me-2"><i class="bi bi-circle text-secondary"></i></div>
+                                        <span>Finalizing</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <p class="text-muted small">This may take a few minutes. Please don't close this window.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            const modalContainer = document.createElement("div");
+            modalContainer.innerHTML = modalHtml;
+            document.body.appendChild(modalContainer.firstElementChild);
+        }
+        
+        // Show the modal
+        const progressModal = new bootstrap.Modal(document.getElementById("storyProgressModal"));
+        progressModal.show();
+    }
+    
+    function hideProgressModal() {
+        const progressModal = bootstrap.Modal.getInstance(document.getElementById("storyProgressModal"));
+        if (progressModal) {
+            progressModal.hide();
+        }
+    }
+    
+    function updateProgress(percent, stepText, currentStep) {
+        const progressBar = document.getElementById("storyProgressBar");
+        const progressStepText = document.getElementById("progressStepText");
+        const currentStepText = document.getElementById("currentStepText");
+        
+        if (progressBar && progressStepText) {
+            progressBar.style.width = percent + "%";
+            progressBar.setAttribute("aria-valuenow", percent);
+            progressBar.textContent = percent + "%";
+            progressStepText.textContent = stepText;
+            
+            if (currentStepText && currentStep) {
+                currentStepText.textContent = currentStep;
+            }
+            
+            // Update step indicators
+            updateStepIndicators(percent);
+        }
+    }
+    
+    function updateStepIndicators(percent) {
+        const stepIndicators = document.querySelectorAll(".step-indicator");
+        
+        // Reset all indicators
+        stepIndicators.forEach((indicator, index) => {
+            indicator.innerHTML = '<i class="bi bi-circle text-secondary"></i>';
+            indicator.classList.remove("completed", "active");
+        });
+        
+        // Set completed and active steps based on progress percentage
+        if (percent >= 10) {
+            stepIndicators[0].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
+            stepIndicators[0].classList.add("completed");
+        }
+        
+        if (percent >= 10 && percent < 40) {
+            stepIndicators[1].innerHTML = '<i class="bi bi-arrow-right-circle-fill text-primary"></i>';
+            stepIndicators[1].classList.add("active");
+        } else if (percent >= 40) {
+            stepIndicators[1].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
+            stepIndicators[1].classList.add("completed");
+        }
+        
+        if (percent >= 40 && percent < 70) {
+            stepIndicators[2].innerHTML = '<i class="bi bi-arrow-right-circle-fill text-primary"></i>';
+            stepIndicators[2].classList.add("active");
+        } else if (percent >= 70) {
+            stepIndicators[2].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
+            stepIndicators[2].classList.add("completed");
+        }
+        
+        if (percent >= 70 && percent < 90) {
+            stepIndicators[3].innerHTML = '<i class="bi bi-arrow-right-circle-fill text-primary"></i>';
+            stepIndicators[3].classList.add("active");
+        } else if (percent >= 90) {
+            stepIndicators[3].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
+            stepIndicators[3].classList.add("completed");
+        }
+        
+        if (percent >= 90) {
+            stepIndicators[4].innerHTML = '<i class="bi bi-arrow-right-circle-fill text-primary"></i>';
+            stepIndicators[4].classList.add("active");
+        }
+        
+        if (percent >= 100) {
+            stepIndicators[4].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
+            stepIndicators[4].classList.add("completed");
+        }
+    }
+    
+    function startProgressUpdates() {
+        // Start polling for progress updates
+        let sessionId = null;
+        
+        // First get the session ID from the form submission
+        fetch('/get_session_id')
+            .then(response => response.json())
+            .then(data => {
+                sessionId = data.session_id;
+                startPolling(sessionId);
+            })
+            .catch(error => {
+                console.error('Error getting session ID:', error);
+                // Fall back to polling without session ID
+                startPolling();
+            });
+            
+        function startPolling(sid) {
+            let progressCheckInterval = setInterval(function() {
+                const url = sid ? `/story_progress?session_id=${sid}` : '/story_progress';
+                fetch(url)
+                    .then(response => response.json())
+                    .then(data => {
+                        updateProgress(data.percent, data.message, data.current_step);
+                        
+                        if (data.percent >= 100 || data.status === 'complete') {
+                            clearInterval(progressCheckInterval);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error checking progress:', error);
+                    });
+            }, 1000);
+        }
+    }
 </script>
 """
 
@@ -566,9 +768,56 @@ def index():
     # Also pass any specific JS for UPLOAD_TEMPLATE if needed, or ensure it's self-contained
     return render_template_string(MAIN_TEMPLATE, content=content, page_title="Create Your Story - Storybook Magic")
 
+# Global progress tracking dictionary
+story_progress = {}
+
+@app.route("/get_session_id")
+def get_session_id():
+    """Generate and return a new session ID for progress tracking."""
+    session_id = str(uuid.uuid4())
+    # Initialize with starting values
+    story_progress[session_id] = {
+        'percent': 10,
+        'message': 'Starting story creation...',
+        'current_step': 'Initializing',
+        'status': 'in_progress'
+    }
+    return {'session_id': session_id}
+
+@app.route("/story_progress")
+def get_story_progress():
+    """Endpoint to check story generation progress."""
+    session_id = request.args.get('session_id', 'default')
+    
+    # Return current progress or default values if not found
+    progress_data = story_progress.get(session_id, {
+        'percent': 10,
+        'message': 'Starting story creation...',
+        'current_step': 'Initializing',
+        'status': 'in_progress'
+    })
+    
+    return progress_data
+
+def update_progress(session_id, percent, message, current_step, status='in_progress'):
+    """Update the progress for a specific session."""
+    story_progress[session_id] = {
+        'percent': percent,
+        'message': message,
+        'current_step': current_step,
+        'status': status
+    }
+    logger.info(f"Progress updated for {session_id}: {percent}% - {message}")
+
 @app.route("/generate", methods=["POST"])
 def generate():
     try:
+        # Generate a unique session ID for tracking progress
+        session_id = str(uuid.uuid4())
+        
+        # Initialize progress
+        update_progress(session_id, 10, "Uploading and processing image...", "Processing uploaded image")
+        
         child_name = request.form["child_name"]
         child_image_file = request.files["child_image"]
         age_range = request.form["age_range"]
@@ -587,16 +836,23 @@ def generate():
         with open(image_path, "rb") as f:
             image_data_base64 = base64.b64encode(f.read()).decode("utf-8")
 
+        # Update progress after image processing
+        update_progress(session_id, 20, "Analyzing child's features...", "Analyzing image")
+
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             logger.error("OPENAI_API_KEY environment variable not set.")
             return "Server configuration error: API key not set.", 500
 
         # Generate Ghibli-style image for the cover
+        update_progress(session_id, 30, "Creating Ghibli-style cover image...", "Generating cover image")
         ghibli_image_path = generate_ghibli_style_image(image_data_base64, api_key)
         if not ghibli_image_path:
             logger.warning("Failed to generate Ghibli-style image, using original image as fallback.")
             ghibli_image_path = image_path # Fallback to original if Ghibli fails
+        
+        # Update progress after Ghibli image generation
+        update_progress(session_id, 50, "Writing your personalized story...", "Creating story")
 
         story_text = generate_story(
             child_name, 
@@ -606,10 +862,20 @@ def generate():
             generate_illustrations_flag,
             rhyming_flag
         )
+        
+        # Update progress after story generation
+        if generate_illustrations_flag:
+            update_progress(session_id, 70, "Story created! Now adding illustrations...", "Generating illustrations")
+        else:
+            update_progress(session_id, 80, "Story created! Finalizing your story...", "Finalizing")
 
+        # Final progress update before redirecting
+        update_progress(session_id, 90, "Finalizing your story...", "Preparing display")
+        
         story_id = str(uuid.uuid4())
         stories[story_id] = {
             "child_name": child_name,
+            "session_id": session_id,
             "theme": theme,
             "age_range": age_range,
             "story_text": story_text, # Store raw story text with placeholders
@@ -666,7 +932,11 @@ def generate():
         # Store the final HTML (with illustrations or removed placeholders)
         stories[story_id]["story_html_final"] = story_html
 
-        return redirect(url_for("show_story", story_id=story_id))
+        # Set final progress to 100% before redirecting
+        update_progress(session_id, 100, "Story complete! Redirecting...", "Complete", status="complete")
+        
+        # Return JSON response for AJAX handling
+        return {"redirect": url_for("show_story", story_id=story_id)}
 
     except Exception as e:
         logger.error(f"Error in /generate: {str(e)}", exc_info=True)
