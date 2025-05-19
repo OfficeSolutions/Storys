@@ -486,15 +486,31 @@ UPLOAD_TEMPLATE = """
             if (xhr.readyState === 4) {
                 if (xhr.status === 200) {
                     try {
+                        console.log('Response received:', xhr.responseText);
                         const response = JSON.parse(xhr.responseText);
                         if (response.redirect) {
+                            console.log('Redirecting to:', response.redirect);
                             window.location.href = response.redirect;
+                        } else {
+                            console.error('No redirect URL in response');
+                            hideProgressModal();
+                            alert("An error occurred while processing your story. Please try again.");
                         }
                     } catch (e) {
-                        // If response is not JSON, it might be a redirect
-                        window.location.href = xhr.responseURL || "/";
+                        console.error('Error parsing JSON response:', e, 'Response text:', xhr.responseText);
+                        // If response is not JSON, check if it's HTML (direct response)
+                        if (xhr.responseText.includes('<!DOCTYPE html>') || xhr.responseText.includes('<html>')) {
+                            // The response is already HTML, likely the story page
+                            document.open();
+                            document.write(xhr.responseText);
+                            document.close();
+                        } else {
+                            // Try to use responseURL as fallback
+                            window.location.href = xhr.responseURL || "/";
+                        }
                     }
                 } else {
+                    console.error('Request failed with status:', xhr.status);
                     hideProgressModal();
                     alert("An error occurred while generating your story. Please try again.");
                 }
@@ -557,9 +573,35 @@ UPLOAD_TEMPLATE = """
             document.body.appendChild(modalContainer.firstElementChild);
         }
         
-        // Show the modal
-        const progressModal = new bootstrap.Modal(document.getElementById("storyProgressModal"));
-        progressModal.show();
+        try {
+            // Ensure Bootstrap is loaded
+            if (typeof bootstrap === 'undefined') {
+                console.error('Bootstrap is not loaded. Adding fallback modal display.');
+                const modal = document.getElementById("storyProgressModal");
+                if (modal) {
+                    modal.classList.add('show');
+                    modal.style.display = 'block';
+                    modal.setAttribute('aria-modal', 'true');
+                    modal.setAttribute('role', 'dialog');
+                    document.body.classList.add('modal-open');
+                    
+                    // Add backdrop if it doesn't exist
+                    if (!document.querySelector('.modal-backdrop')) {
+                        const backdrop = document.createElement('div');
+                        backdrop.classList.add('modal-backdrop', 'fade', 'show');
+                        document.body.appendChild(backdrop);
+                    }
+                }
+            } else {
+                // Show the modal using Bootstrap
+                const progressModal = new bootstrap.Modal(document.getElementById("storyProgressModal"));
+                progressModal.show();
+            }
+            console.log('Progress modal displayed successfully');
+        } catch (error) {
+            console.error('Error showing modal:', error);
+            alert('Story creation started. Please wait while we generate your story...');
+        }
     }
     
     function hideProgressModal() {
@@ -936,7 +978,8 @@ def generate():
         update_progress(session_id, 100, "Story complete! Redirecting...", "Complete", status="complete")
         
         # Return JSON response for AJAX handling
-        return {"redirect": url_for("show_story", story_id=story_id)}
+        from flask import jsonify
+        return jsonify({"redirect": url_for("show_story", story_id=story_id)})
 
     except Exception as e:
         logger.error(f"Error in /generate: {str(e)}", exc_info=True)
