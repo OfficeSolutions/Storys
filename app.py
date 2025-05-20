@@ -6,7 +6,7 @@ import uuid
 import urllib.parse
 import logging
 import re # Added re import
-from flask import Flask, render_template_string, request, redirect, url_for, send_file, abort
+from flask import Flask, render_template_string, request, redirect, url_for, send_file, abort, jsonify
 from werkzeug.utils import secure_filename
 from enhanced_story_generator import (
     generate_story, 
@@ -25,6 +25,8 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max upload size
 # In-memory storage for stories and images
 stories = {}
 illustration_images = {}
+# Global progress tracking dictionary
+story_progress = {}
 
 def encode_image(image_path):
     """Encode an image to base64."""
@@ -280,6 +282,48 @@ MAIN_TEMPLATE = """
             line-height: 1.8;
         }
         
+        /* Progress page styles */
+        .progress-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 2rem;
+            background-color: var(--light-color);
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .progress-bar {
+            height: 25px;
+            border-radius: 0.25rem;
+        }
+        
+        .step-indicator {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        
+        .step-indicator.completed {
+            background-color: rgba(25, 135, 84, 0.1);
+        }
+        
+        .step-indicator.active {
+            background-color: rgba(13, 110, 253, 0.1);
+        }
+        
+        .progress-message {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+        }
+        
+        .progress-steps {
+            margin-top: 2rem;
+        }
+        
         @media (max-width: 768px) {
             .hero-section {
                 padding: 3rem 0;
@@ -348,7 +392,7 @@ UPLOAD_TEMPLATE = """
 <div class="hero-section text-center mb-5">
     <div class="container">
         <h1 class="display-4 fw-bold mb-3">Create Magical Bedtime Stories</h1>
-        <p class="lead mb-4">Upload a photo of your child and we\"ll create a personalized bedtime story featuring them as the main character!</p>
+        <p class="lead mb-4">Upload a photo of your child and we'll create a personalized bedtime story featuring them as the main character!</p>
         <a href="#create-story" class="btn btn-primary btn-lg px-4">Get Started</a>
     </div>
 </div>
@@ -387,13 +431,13 @@ UPLOAD_TEMPLATE = """
     <h2 class="text-center mb-4">Create Your Personalized Story</h2>
     <form action="/generate" method="post" enctype="multipart/form-data">
         <div class="mb-3">
-            <label for="child_name" class="form-label">Child\"s Name</label>
+            <label for="child_name" class="form-label">Child's Name</label>
             <input type="text" class="form-control" id="child_name" name="child_name" required>
         </div>
         <div class="mb-3">
             <label for="child_image" class="form-label">Upload a Photo</label>
             <input type="file" class="form-control" id="child_image" name="child_image" accept="image/*" required>
-            <div class="form-text">We\"ll use this photo to personalize the story.</div>
+            <div class="form-text">We'll use this photo to personalize the story.</div>
         </div>
         <div class="mb-3">
             <label for="age_range" class="form-label">Age Range</label>
@@ -455,268 +499,6 @@ UPLOAD_TEMPLATE = """
         </div>
     </div>
 </div>
-<script>
-    // Form validation and progress bar handling
-    const form = document.querySelector("form");
-    form.addEventListener("submit", function(event) {
-        const childName = document.getElementById("child_name").value;
-        const childImage = document.getElementById("child_image").files;
-        if (!childName.trim()) {
-            alert("Please enter the child\"s name.");
-            event.preventDefault();
-            return;
-        }
-        if (childImage.length === 0) {
-            alert("Please upload a photo of the child.");
-            event.preventDefault();
-            return;
-        }
-        
-        // Show progress modal
-        event.preventDefault();
-        showProgressModal();
-        
-        // Submit form via AJAX
-        const formData = new FormData(form);
-        const xhr = new XMLHttpRequest();
-        
-        xhr.open("POST", "/generate", true);
-        
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState === 4) {
-                if (xhr.status === 200) {
-                    try {
-                        console.log('Response received:', xhr.responseText);
-                        const response = JSON.parse(xhr.responseText);
-                        if (response.redirect) {
-                            console.log('Redirecting to:', response.redirect);
-                            window.location.href = response.redirect;
-                        } else {
-                            console.error('No redirect URL in response');
-                            hideProgressModal();
-                            alert("An error occurred while processing your story. Please try again.");
-                        }
-                    } catch (e) {
-                        console.error('Error parsing JSON response:', e, 'Response text:', xhr.responseText);
-                        // If response is not JSON, check if it's HTML (direct response)
-                        if (xhr.responseText.includes('<!DOCTYPE html>') || xhr.responseText.includes('<html>')) {
-                            // The response is already HTML, likely the story page
-                            document.open();
-                            document.write(xhr.responseText);
-                            document.close();
-                        } else {
-                            // Try to use responseURL as fallback
-                            window.location.href = xhr.responseURL || "/";
-                        }
-                    }
-                } else {
-                    console.error('Request failed with status:', xhr.status);
-                    hideProgressModal();
-                    alert("An error occurred while generating your story. Please try again.");
-                }
-            }
-        };
-        
-        xhr.send(formData);
-        startProgressUpdates();
-    });
-    
-    // Progress modal functions
-    function showProgressModal() {
-        // Create modal if it doesn't exist
-        if (!document.getElementById("storyProgressModal")) {
-            const modalHtml = `
-                <div class="modal fade" id="storyProgressModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="storyProgressModalLabel" aria-hidden="true">
-                    <div class="modal-dialog modal-dialog-centered">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title" id="storyProgressModalLabel">Creating Your Story</h5>
-                            </div>
-                            <div class="modal-body">
-                                <p id="progressStepText">Uploading and processing image...</p>
-                                <div class="progress" style="height: 25px;">
-                                    <div id="storyProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 10%;" aria-valuenow="10" aria-valuemin="0" aria-valuemax="100">10%</div>
-                                </div>
-                                <div class="mt-4">
-                                    <div class="d-flex align-items-center mb-2">
-                                        <div class="step-indicator completed me-2"><i class="bi bi-check-circle-fill text-success"></i></div>
-                                        <span>Preparing your story</span>
-                                    </div>
-                                    <div class="d-flex align-items-center mb-2">
-                                        <div class="step-indicator active me-2"><i class="bi bi-arrow-right-circle-fill text-primary"></i></div>
-                                        <span id="currentStepText">Analyzing image</span>
-                                    </div>
-                                    <div class="d-flex align-items-center mb-2">
-                                        <div class="step-indicator me-2"><i class="bi bi-circle text-secondary"></i></div>
-                                        <span>Creating story</span>
-                                    </div>
-                                    <div class="d-flex align-items-center mb-2">
-                                        <div class="step-indicator me-2"><i class="bi bi-circle text-secondary"></i></div>
-                                        <span>Generating illustrations</span>
-                                    </div>
-                                    <div class="d-flex align-items-center">
-                                        <div class="step-indicator me-2"><i class="bi bi-circle text-secondary"></i></div>
-                                        <span>Finalizing</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="modal-footer">
-                                <p class="text-muted small">This may take a few minutes. Please don't close this window.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            const modalContainer = document.createElement("div");
-            modalContainer.innerHTML = modalHtml;
-            document.body.appendChild(modalContainer.firstElementChild);
-        }
-        
-        try {
-            // Ensure Bootstrap is loaded
-            if (typeof bootstrap === 'undefined') {
-                console.error('Bootstrap is not loaded. Adding fallback modal display.');
-                const modal = document.getElementById("storyProgressModal");
-                if (modal) {
-                    modal.classList.add('show');
-                    modal.style.display = 'block';
-                    modal.setAttribute('aria-modal', 'true');
-                    modal.setAttribute('role', 'dialog');
-                    document.body.classList.add('modal-open');
-                    
-                    // Add backdrop if it doesn't exist
-                    if (!document.querySelector('.modal-backdrop')) {
-                        const backdrop = document.createElement('div');
-                        backdrop.classList.add('modal-backdrop', 'fade', 'show');
-                        document.body.appendChild(backdrop);
-                    }
-                }
-            } else {
-                // Show the modal using Bootstrap
-                const progressModal = new bootstrap.Modal(document.getElementById("storyProgressModal"));
-                progressModal.show();
-            }
-            console.log('Progress modal displayed successfully');
-        } catch (error) {
-            console.error('Error showing modal:', error);
-            alert('Story creation started. Please wait while we generate your story...');
-        }
-    }
-    
-    function hideProgressModal() {
-        const progressModal = bootstrap.Modal.getInstance(document.getElementById("storyProgressModal"));
-        if (progressModal) {
-            progressModal.hide();
-        }
-    }
-    
-    function updateProgress(percent, stepText, currentStep) {
-        const progressBar = document.getElementById("storyProgressBar");
-        const progressStepText = document.getElementById("progressStepText");
-        const currentStepText = document.getElementById("currentStepText");
-        
-        if (progressBar && progressStepText) {
-            progressBar.style.width = percent + "%";
-            progressBar.setAttribute("aria-valuenow", percent);
-            progressBar.textContent = percent + "%";
-            progressStepText.textContent = stepText;
-            
-            if (currentStepText && currentStep) {
-                currentStepText.textContent = currentStep;
-            }
-            
-            // Update step indicators
-            updateStepIndicators(percent);
-        }
-    }
-    
-    function updateStepIndicators(percent) {
-        const stepIndicators = document.querySelectorAll(".step-indicator");
-        
-        // Reset all indicators
-        stepIndicators.forEach((indicator, index) => {
-            indicator.innerHTML = '<i class="bi bi-circle text-secondary"></i>';
-            indicator.classList.remove("completed", "active");
-        });
-        
-        // Set completed and active steps based on progress percentage
-        if (percent >= 10) {
-            stepIndicators[0].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
-            stepIndicators[0].classList.add("completed");
-        }
-        
-        if (percent >= 10 && percent < 40) {
-            stepIndicators[1].innerHTML = '<i class="bi bi-arrow-right-circle-fill text-primary"></i>';
-            stepIndicators[1].classList.add("active");
-        } else if (percent >= 40) {
-            stepIndicators[1].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
-            stepIndicators[1].classList.add("completed");
-        }
-        
-        if (percent >= 40 && percent < 70) {
-            stepIndicators[2].innerHTML = '<i class="bi bi-arrow-right-circle-fill text-primary"></i>';
-            stepIndicators[2].classList.add("active");
-        } else if (percent >= 70) {
-            stepIndicators[2].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
-            stepIndicators[2].classList.add("completed");
-        }
-        
-        if (percent >= 70 && percent < 90) {
-            stepIndicators[3].innerHTML = '<i class="bi bi-arrow-right-circle-fill text-primary"></i>';
-            stepIndicators[3].classList.add("active");
-        } else if (percent >= 90) {
-            stepIndicators[3].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
-            stepIndicators[3].classList.add("completed");
-        }
-        
-        if (percent >= 90) {
-            stepIndicators[4].innerHTML = '<i class="bi bi-arrow-right-circle-fill text-primary"></i>';
-            stepIndicators[4].classList.add("active");
-        }
-        
-        if (percent >= 100) {
-            stepIndicators[4].innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
-            stepIndicators[4].classList.add("completed");
-        }
-    }
-    
-    function startProgressUpdates() {
-        // Start polling for progress updates
-        let sessionId = null;
-        
-        // First get the session ID from the form submission
-        fetch('/get_session_id')
-            .then(response => response.json())
-            .then(data => {
-                sessionId = data.session_id;
-                startPolling(sessionId);
-            })
-            .catch(error => {
-                console.error('Error getting session ID:', error);
-                // Fall back to polling without session ID
-                startPolling();
-            });
-            
-        function startPolling(sid) {
-            let progressCheckInterval = setInterval(function() {
-                const url = sid ? `/story_progress?session_id=${sid}` : '/story_progress';
-                fetch(url)
-                    .then(response => response.json())
-                    .then(data => {
-                        updateProgress(data.percent, data.message, data.current_step);
-                        
-                        if (data.percent >= 100 || data.status === 'complete') {
-                            clearInterval(progressCheckInterval);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error checking progress:', error);
-                    });
-            }, 1000);
-        }
-    }
-</script>
 """
 
 # HTML template for the story page
@@ -724,132 +506,145 @@ STORY_TEMPLATE = """
 <div class="story-container">
     <div class="row mb-4">
         <div class="col-md-8">
-            <h1 class="mb-3">{{ child_name }}\\'s {{ theme|title }} Story</h1>
-            <div class="d-flex gap-2 mb-4">
-                <span class="badge bg-primary">{{ theme|title }}</span>
-                <span class="badge bg-secondary">Age: {{ age_range }}</span>
-                <span class="badge bg-info">AI-Generated</span>
-                {% if rhyming %}
-                <span class="badge bg-success">Rhyming</span>
-                {% endif %}
+            <h1 class="mb-3">{{ story_data["child_name"] }}'s Story</h1>
+            <div class="d-flex align-items-center mb-3">
+                <span class="badge bg-primary me-2">{{ story_data["theme"].title() }}</span>
+                <span class="badge bg-secondary me-2">{{ story_data["age_range"] }} years</span>
             </div>
         </div>
-        <div class="col-md-4 text-end">
-            <a href="/" class="btn btn-outline-primary"><i class="bi bi-plus-circle me-2"></i>Create New Story</a>
+        <div class="col-md-4 text-md-end">
+            <a href="/" class="btn btn-outline-primary">Create Another Story</a>
         </div>
     </div>
     
-    <div class="row">
-        <div class="col-md-4 mb-4">
-            <img src="{{ image_path }}" alt="{{ child_name }}" class="child-image img-fluid mb-3">
-            <div class="d-grid gap-2">
-                <a href="#" class="btn btn-primary print-story"><i class="bi bi-printer me-2"></i>Print Story</a>
-                <a href="#" class="btn btn-outline-primary share-story"><i class="bi bi-share me-2"></i>Share Story</a>
+    <div class="book-container mb-5">
+        <div class="book">
+            <div class="book-front">
+                <h2 class="book-title">{{ story_data["child_name"] }}'s Adventure</h2>
+                <p class="book-author">A personalized story by Storybook Magic</p>
+                <img src="{{ story_data['image_path'] }}" alt="Book Cover" class="book-cover-image">
+                <p>A magical tale featuring {{ story_data["child_name"] }}</p>
             </div>
-        </div>
-        <div class="col-md-8">
-            <!-- 3D Book Preview -->
-            <div class="book-container">
-                <div class="book">
-                    <div class="book-front">
-                        <div class="book-title">{{ child_name }}\\'s {{ theme|title }} Adventure</div>
-                        <div class="book-author">A Personalized Story for Ages {{ age_range }}</div>
-                        <img src="{{ image_path }}" alt="{{ child_name }}" class="book-cover-image">
-                        <p>Hover to open the book</p>
-                    </div>
-                    <div class="book-back"></div>
-                    <div class="book-spine"></div>
-                    <div class="book-top"></div>
-                    <div class="book-bottom"></div>
-                    <div class="book-right"></div>
-                </div>
-            </div>
-            
-            <div class="story-content">
-                {{ story_html|safe }}
-            </div>
+            <div class="book-back"></div>
+            <div class="book-spine"></div>
+            <div class="book-top"></div>
+            <div class="book-bottom"></div>
+            <div class="book-right"></div>
         </div>
     </div>
+    
+    <div class="story-content">
+        {{ story_data["story_html_final"]|safe }}
+    </div>
+    
+    <div class="text-center mt-5">
+        <a href="/" class="btn btn-primary me-2">Create Another Story</a>
+        <button class="btn btn-outline-primary" onclick="window.print()">Print Story</button>
+    </div>
 </div>
-<script>
-    document.addEventListener("DOMContentLoaded", function() {
-        const printButton = document.querySelector(".print-story");
-        if (printButton) {
-            printButton.addEventListener("click", function(event) {
-                event.preventDefault();
-                window.print();
-            });
-        }
+"""
 
-        const shareButton = document.querySelector(".share-story");
-        if (shareButton) {
-            shareButton.addEventListener("click", function(event) {
-                event.preventDefault();
-                if (navigator.share) {
-                    navigator.share({
-                        title: document.title,
-                        text: "Check out this personalized story I created!",
-                        url: window.location.href
-                    }).then(() => {
-                        console.log("Thanks for sharing!");
-                    }).catch(console.error);
-                } else {
-                    // Fallback for browsers that don\"t support navigator.share
-                    alert("Sharing is not supported on this browser, but you can copy the URL!");
-                }
-            });
-        }
-    });
+# HTML template for the progress page
+PROGRESS_TEMPLATE = """
+<div class="progress-container mt-5">
+    <h2 class="text-center mb-4">Creating Your Story</h2>
+    
+    <div class="progress-message text-center mb-4">{{ progress_data["message"] }}</div>
+    
+    <div class="progress mb-4" style="height: 25px;">
+        <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" 
+             style="width: {{ progress_data['percent'] }}%;" 
+             aria-valuenow="{{ progress_data['percent'] }}" aria-valuemin="0" aria-valuemax="100">
+            {{ progress_data["percent"] }}%
+        </div>
+    </div>
+    
+    <div class="progress-steps">
+        <div class="d-flex align-items-center mb-3">
+            <div class="step-indicator {% if progress_data['percent'] >= 10 %}completed{% endif %} me-2">
+                <i class="bi {% if progress_data['percent'] >= 10 %}bi-check-circle-fill text-success{% else %}bi-circle text-secondary{% endif %}"></i>
+            </div>
+            <span>Preparing your story</span>
+        </div>
+        
+        <div class="d-flex align-items-center mb-3">
+            <div class="step-indicator {% if progress_data['percent'] >= 10 and progress_data['percent'] < 40 %}active{% elif progress_data['percent'] >= 40 %}completed{% endif %} me-2">
+                <i class="bi {% if progress_data['percent'] >= 10 and progress_data['percent'] < 40 %}bi-arrow-right-circle-fill text-primary{% elif progress_data['percent'] >= 40 %}bi-check-circle-fill text-success{% else %}bi-circle text-secondary{% endif %}"></i>
+            </div>
+            <span>Analyzing image</span>
+        </div>
+        
+        <div class="d-flex align-items-center mb-3">
+            <div class="step-indicator {% if progress_data['percent'] >= 40 and progress_data['percent'] < 70 %}active{% elif progress_data['percent'] >= 70 %}completed{% endif %} me-2">
+                <i class="bi {% if progress_data['percent'] >= 40 and progress_data['percent'] < 70 %}bi-arrow-right-circle-fill text-primary{% elif progress_data['percent'] >= 70 %}bi-check-circle-fill text-success{% else %}bi-circle text-secondary{% endif %}"></i>
+            </div>
+            <span>Creating story</span>
+        </div>
+        
+        <div class="d-flex align-items-center mb-3">
+            <div class="step-indicator {% if progress_data['percent'] >= 70 and progress_data['percent'] < 90 %}active{% elif progress_data['percent'] >= 90 %}completed{% endif %} me-2">
+                <i class="bi {% if progress_data['percent'] >= 70 and progress_data['percent'] < 90 %}bi-arrow-right-circle-fill text-primary{% elif progress_data['percent'] >= 90 %}bi-check-circle-fill text-success{% else %}bi-circle text-secondary{% endif %}"></i>
+            </div>
+            <span>Generating illustrations</span>
+        </div>
+        
+        <div class="d-flex align-items-center">
+            <div class="step-indicator {% if progress_data['percent'] >= 90 and progress_data['percent'] < 100 %}active{% elif progress_data['percent'] >= 100 %}completed{% endif %} me-2">
+                <i class="bi {% if progress_data['percent'] >= 90 and progress_data['percent'] < 100 %}bi-arrow-right-circle-fill text-primary{% elif progress_data['percent'] >= 100 %}bi-check-circle-fill text-success{% else %}bi-circle text-secondary{% endif %}"></i>
+            </div>
+            <span>Finalizing</span>
+        </div>
+    </div>
+    
+    <div class="text-center mt-4">
+        <p class="text-muted">This may take a few minutes. The page will automatically refresh.</p>
+    </div>
+</div>
+
+<script>
+    // Auto-refresh the page every 2 seconds to update progress
+    setTimeout(function() {
+        window.location.reload();
+    }, 2000);
+    
+    // If progress is 100%, redirect to the story page
+    {% if progress_data['status'] == 'complete' and progress_data['redirect_url'] %}
+        window.location.href = "{{ progress_data['redirect_url'] }}";
+    {% endif %}
 </script>
 """
 
 @app.route("/")
 def index():
-    # Pass UPLOAD_TEMPLATE content directly to MAIN_TEMPLATE
     content = render_template_string(UPLOAD_TEMPLATE)
-    # Also pass any specific JS for UPLOAD_TEMPLATE if needed, or ensure it's self-contained
     return render_template_string(MAIN_TEMPLATE, content=content, page_title="Create Your Story - Storybook Magic")
 
-# Global progress tracking dictionary
-story_progress = {}
-
-@app.route("/get_session_id")
-def get_session_id():
-    """Generate and return a new session ID for progress tracking."""
-    session_id = str(uuid.uuid4())
-    # Initialize with starting values
-    story_progress[session_id] = {
-        'percent': 10,
-        'message': 'Starting story creation...',
-        'current_step': 'Initializing',
-        'status': 'in_progress'
-    }
-    return {'session_id': session_id}
-
-@app.route("/story_progress")
-def get_story_progress():
-    """Endpoint to check story generation progress."""
-    session_id = request.args.get('session_id', 'default')
-    
-    # Return current progress or default values if not found
-    progress_data = story_progress.get(session_id, {
-        'percent': 10,
-        'message': 'Starting story creation...',
-        'current_step': 'Initializing',
-        'status': 'in_progress'
-    })
-    
-    return progress_data
-
-def update_progress(session_id, percent, message, current_step, status='in_progress'):
+def update_progress(session_id, percent, message, current_step, status='in_progress', redirect_url=None):
     """Update the progress for a specific session."""
     story_progress[session_id] = {
         'percent': percent,
         'message': message,
         'current_step': current_step,
-        'status': status
+        'status': status,
+        'redirect_url': redirect_url
     }
     logger.info(f"Progress updated for {session_id}: {percent}% - {message}")
+
+@app.route("/progress/<session_id>")
+def show_progress(session_id):
+    """Show the progress page for a specific session."""
+    # Get progress data or default values if not found
+    progress_data = story_progress.get(session_id, {
+        'percent': 10,
+        'message': 'Starting story creation...',
+        'current_step': 'Initializing',
+        'status': 'in_progress',
+        'redirect_url': None
+    })
+    
+    # Render the progress template
+    content = render_template_string(PROGRESS_TEMPLATE, progress_data=progress_data)
+    return render_template_string(MAIN_TEMPLATE, content=content, page_title="Creating Your Story - Storybook Magic")
 
 @app.route("/generate", methods=["POST"])
 def generate():
@@ -860,6 +655,7 @@ def generate():
         # Initialize progress
         update_progress(session_id, 10, "Uploading and processing image...", "Processing uploaded image")
         
+        # Store form data
         child_name = request.form["child_name"]
         child_image_file = request.files["child_image"]
         age_range = request.form["age_range"]
@@ -870,32 +666,71 @@ def generate():
         if not child_image_file or child_image_file.filename == "":
             return "No image file provided", 400
 
+        # Save the uploaded image
         filename = secure_filename(child_image_file.filename if child_image_file.filename else "uploaded_image")
         temp_dir = tempfile.mkdtemp()
         image_path = os.path.join(temp_dir, filename)
         child_image_file.save(image_path)
 
+        # Create a new story ID and store initial data
+        story_id = str(uuid.uuid4())
+        stories[story_id] = {
+            "child_name": child_name,
+            "session_id": session_id,
+            "theme": theme,
+            "age_range": age_range,
+            "generate_illustrations": generate_illustrations_flag,
+            "rhyming": rhyming_flag,
+            "image_path": image_path,
+            "status": "processing"
+        }
+        
+        # Redirect to the progress page
+        return redirect(url_for("show_progress", session_id=session_id))
+        
+    except Exception as e:
+        logger.error(f"Error in /generate: {str(e)}", exc_info=True)
+        return f"An error occurred: {str(e)}", 500
+
+@app.route("/process_story/<story_id>")
+def process_story(story_id):
+    """Background processing endpoint for story generation."""
+    try:
+        story_data = stories.get(story_id)
+        if not story_data:
+            return "Story not found", 404
+            
+        session_id = story_data["session_id"]
+        child_name = story_data["child_name"]
+        theme = story_data["theme"]
+        age_range = story_data["age_range"]
+        generate_illustrations_flag = story_data["generate_illustrations"]
+        rhyming_flag = story_data["rhyming"]
+        image_path = story_data["image_path"]
+        
+        # Encode image to base64
         with open(image_path, "rb") as f:
             image_data_base64 = base64.b64encode(f.read()).decode("utf-8")
-
+        
         # Update progress after image processing
         update_progress(session_id, 20, "Analyzing child's features...", "Analyzing image")
-
+        
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             logger.error("OPENAI_API_KEY environment variable not set.")
             return "Server configuration error: API key not set.", 500
-
+            
         # Generate Ghibli-style image for the cover
         update_progress(session_id, 30, "Creating Ghibli-style cover image...", "Generating cover image")
         ghibli_image_path = generate_ghibli_style_image(image_data_base64, api_key)
         if not ghibli_image_path:
             logger.warning("Failed to generate Ghibli-style image, using original image as fallback.")
             ghibli_image_path = image_path # Fallback to original if Ghibli fails
-        
+            
         # Update progress after Ghibli image generation
         update_progress(session_id, 50, "Writing your personalized story...", "Creating story")
-
+        
+        # Generate the story
         story_text = generate_story(
             child_name, 
             image_data_base64, 
@@ -905,51 +740,33 @@ def generate():
             rhyming_flag
         )
         
-        # Update progress after story generation
+        # Update story data with generated content
+        stories[story_id]["story_text"] = story_text
+        stories[story_id]["image_path"] = url_for("get_uploaded_image", story_id=story_id, filename=os.path.basename(ghibli_image_path))
+        
+        # Process illustrations if requested
+        illustration_images = {}
+        generated_illustration_paths_urls = []
+        
         if generate_illustrations_flag:
             update_progress(session_id, 70, "Story created! Now adding illustrations...", "Generating illustrations")
-        else:
-            update_progress(session_id, 80, "Story created! Finalizing your story...", "Finalizing")
-
-        # Final progress update before redirecting
-        update_progress(session_id, 90, "Finalizing your story...", "Preparing display")
-        
-        story_id = str(uuid.uuid4())
-        stories[story_id] = {
-            "child_name": child_name,
-            "session_id": session_id,
-            "theme": theme,
-            "age_range": age_range,
-            "story_text": story_text, # Store raw story text with placeholders
-            "image_path": url_for("get_uploaded_image", story_id=story_id, filename=os.path.basename(ghibli_image_path)),
-            "original_image_path": image_path, # Store path to original for Ghibli fallback
-            "ghibli_image_path": ghibli_image_path, # Store path to Ghibli image
-            "generate_illustrations": generate_illustrations_flag,
-            "rhyming": rhyming_flag
-        }
-
-        # Generate illustrations if requested and replace placeholders
-        story_html = story_text # Start with the raw story text
-        if generate_illustrations_flag:
-            illustration_descriptions = extract_illustration_descriptions(story_text)
-            generated_illustration_paths_urls = [] # URLs for the template
             
-            if not api_key: # This check is redundant if already checked above, but good for safety
-                logger.error("OPENAI_API_KEY not found for illustrations. Cannot generate.")
-            else:
-                for i, desc in enumerate(illustration_descriptions):
-                    logger.info(f"Requesting illustration for: {desc}")
-                    # Corrected call: Pass api_key, not theme
-                    illustration_path = generate_illustration(desc, api_key) 
-                    if illustration_path:
-                        img_id = f"{story_id}_illustration_{i}"
-                        illustration_images[img_id] = illustration_path # Store the actual file path
-                        generated_illustration_paths_urls.append(url_for("get_illustration_image", image_id=img_id))
-                        logger.info(f"Illustration {i} generated: {illustration_path}, URL: {generated_illustration_paths_urls[-1]}")
-                    else:
-                        generated_illustration_paths_urls.append(None)
-                        logger.warning(f"Failed to generate illustration for: {desc}")
-
+            # Extract illustration descriptions from the story
+            illustration_descriptions = extract_illustration_descriptions(story_text)
+            
+            # Generate illustrations for each description
+            for i, desc in enumerate(illustration_descriptions):
+                logger.info(f"Generating illustration {i+1}/{len(illustration_descriptions)}: {desc}")
+                illustration_path = generate_illustration(desc, api_key) 
+                if illustration_path:
+                    img_id = f"{story_id}_illustration_{i}"
+                    illustration_images[img_id] = illustration_path # Store the actual file path
+                    generated_illustration_paths_urls.append(url_for("get_illustration_image", image_id=img_id))
+                    logger.info(f"Illustration {i} generated: {illustration_path}, URL: {generated_illustration_paths_urls[-1]}")
+                else:
+                    generated_illustration_paths_urls.append(None)
+                    logger.warning(f"Failed to generate illustration for: {desc}")
+                    
             # Replace placeholders in story with actual image tags or placeholders
             story_html_parts = story_text.split("[ILLUSTRATION:")
             processed_html = story_html_parts[0]
@@ -968,22 +785,34 @@ def generate():
                     processed_html += part # Append the remainder if parsing fails
             story_html = processed_html
         else:
+            update_progress(session_id, 80, "Story created! Finalizing your story...", "Finalizing")
             # Remove illustration placeholders if not generating
             story_html = re.sub(r'\[ILLUSTRATION: (.*?)\]', '', story_text)
-
+            
+        # Final progress update before redirecting
+        update_progress(session_id, 90, "Finalizing your story...", "Preparing display")
+            
         # Store the final HTML (with illustrations or removed placeholders)
         stories[story_id]["story_html_final"] = story_html
-
-        # Set final progress to 100% before redirecting
-        update_progress(session_id, 100, "Story complete! Redirecting...", "Complete", status="complete")
+        stories[story_id]["status"] = "complete"
         
-        # Return JSON response for AJAX handling
-        from flask import jsonify
-        return jsonify({"redirect": url_for("show_story", story_id=story_id)})
-
+        # Set final progress to 100% with redirect URL
+        update_progress(
+            session_id, 
+            100, 
+            "Story complete! Redirecting...", 
+            "Complete", 
+            status="complete", 
+            redirect_url=url_for("show_story", story_id=story_id)
+        )
+        
+        return "Story processing complete"
+        
     except Exception as e:
-        logger.error(f"Error in /generate: {str(e)}", exc_info=True)
-        # You might want to render an error page here
+        logger.error(f"Error in process_story: {str(e)}", exc_info=True)
+        if story_id in stories and "session_id" in stories[story_id]:
+            session_id = stories[story_id]["session_id"]
+            update_progress(session_id, 0, f"Error: {str(e)}", "Error", status="error")
         return f"An error occurred: {str(e)}", 500
 
 @app.route("/story/<story_id>")
@@ -992,53 +821,36 @@ def show_story(story_id):
     if not story_data:
         abort(404)
     
+    # If story is still processing, redirect to progress page
+    if story_data.get("status") == "processing" and "session_id" in story_data:
+        return redirect(url_for("show_progress", session_id=story_data["session_id"]))
+    
     story_html_final = story_data.get("story_html_final", story_data["story_text"]) # Fallback to raw if not processed
 
     # Pass STORY_TEMPLATE content directly to MAIN_TEMPLATE
-    content = render_template_string(
-        STORY_TEMPLATE, 
-        child_name=story_data["child_name"],
-        theme=story_data["theme"],
-        age_range=story_data["age_range"],
-        story_html=story_html_final,
-        image_path=story_data["image_path"],
-        rhyming=story_data.get("rhyming", False)
-    )
-    # Also pass any specific JS for STORY_TEMPLATE if needed, or ensure it's self-contained
-    return render_template_string(MAIN_TEMPLATE, content=content, page_title=f"{story_data['child_name']}\'s Story - Storybook Magic")
+    content = render_template_string(STORY_TEMPLATE, story_data=story_data)
+    return render_template_string(MAIN_TEMPLATE, content=content, page_title=f"{story_data['child_name']}'s Story - Storybook Magic")
 
-@app.route("/image/<story_id>/<filename>")
+@app.route("/uploads/<story_id>/<filename>")
 def get_uploaded_image(story_id, filename):
     story_data = stories.get(story_id)
     if not story_data:
         abort(404)
-    # Determine if it's the Ghibli image or the original upload
-    # The filename in image_path is already the basename of the Ghibli image (or original if Ghibli failed)
-    image_to_serve = story_data.get("ghibli_image_path")
-    if not image_to_serve or os.path.basename(image_to_serve) != filename:
-        # This case should ideally not happen if image_path is set correctly
-        # but as a fallback, try original if ghibli_image_path is missing or filename doesn't match
-        image_to_serve = story_data.get("original_image_path")
-        if not image_to_serve or os.path.basename(image_to_serve) != filename:
-             abort(404)
-
-    if not os.path.exists(image_to_serve):
-        logger.error(f"Image file not found: {image_to_serve}")
+    
+    # Get the actual file path from the story data
+    image_path = story_data.get("image_path")
+    if not image_path:
         abort(404)
-    return send_file(image_to_serve)
+    
+    return send_file(image_path)
 
-@app.route("/illustration/<image_id>")
+@app.route("/illustrations/<image_id>")
 def get_illustration_image(image_id):
     image_path = illustration_images.get(image_id)
-    if not image_path or not os.path.exists(image_path):
-        logger.error(f"Illustration image not found for ID: {image_id}, Path: {image_path}")
+    if not image_path:
         abort(404)
+    
     return send_file(image_path)
 
 if __name__ == "__main__":
-    # Ensure OPENAI_API_KEY is set
-    if not os.environ.get("OPENAI_API_KEY"):
-        print("Error: OPENAI_API_KEY environment variable not set.")
-        exit(1)
-    app.run(host="0.0.0.0", port=10000, debug=False)
-
+    app.run(debug=True)
