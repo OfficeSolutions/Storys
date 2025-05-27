@@ -1,17 +1,18 @@
 import os
 import tempfile
-import time
-import base64
 import uuid
-import urllib.parse
+import base64
+import re
+import json
 import logging
-import re # Added re import
-from flask import Flask, render_template_string, request, redirect, url_for, send_file, abort, jsonify
+import time
 from werkzeug.utils import secure_filename
+from flask import Flask, request, render_template_string, redirect, url_for, send_file, jsonify, abort
+
 from enhanced_story_generator import (
-    generate_story, 
-    generate_illustration, 
+    generate_story,
     extract_illustration_descriptions,
+    generate_illustration,
     generate_ghibli_style_image
 )
 
@@ -20,163 +21,101 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max upload size
 
-# In-memory storage for stories and images
+# In-memory storage for stories
 stories = {}
-illustration_images = {}
-# Global progress tracking dictionary
 story_progress = {}
 
-def encode_image(image_path):
-    """Encode an image to base64."""
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
-
-# HTML template for the main layout
+# Templates
 MAIN_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ page_title|default("Storybook Magic") }}</title>
+    <title>{{ page_title }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <style>
-        :root {
-            --primary-color: #3a86ff;
-            --secondary-color: #8338ec;
-            --accent-color: #ff006e;
-            --light-color: #ffffff;
-            --dark-color: #212529;
-            --background-color: #f8f9fa;
-        }
-        
         body {
-            font-family: "Nunito", sans-serif;
-            background-color: var(--background-color);
-            color: var(--dark-color);
-            line-height: 1.6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+            color: #333;
         }
         
         .navbar {
-            background-color: var(--light-color);
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
         
         .navbar-brand {
-            font-weight: bold;
-            color: var(--primary-color) !important;
+            font-weight: 600;
+            color: #0d6efd;
         }
         
         .hero-section {
-            padding: 4rem 0;
-            background-color: var(--light-color);
-            border-radius: 0.5rem;
-            margin: 2rem 0;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            background-color: #e9f2ff;
+            padding: 5rem 0;
+            border-radius: 0 0 2rem 2rem;
+            margin-bottom: 3rem;
         }
         
-        .card {
-            border: none;
-            border-radius: 0.5rem;
-            overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-            height: 100%;
+        .hero-title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: #0d6efd;
         }
         
-        .card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-        }
-        
-        .card-img-top {
-            height: 200px;
-            object-fit: cover;
+        .hero-subtitle {
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+            color: #6c757d;
         }
         
         .form-container {
-            background-color: var(--light-color);
-            border-radius: 0.5rem;
+            background-color: #fff;
+            border-radius: 1rem;
             padding: 2rem;
-            margin: 2rem 0;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-        }
-        
-        .btn-primary {
-            background-color: var(--primary-color);
-            border: none;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            margin-bottom: 3rem;
         }
         
-        .btn-primary:hover {
-            background-color: var(--secondary-color);
-            transform: translateY(-2px);
-            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+        .form-label {
+            font-weight: 600;
         }
         
-        .btn-outline-primary {
-            color: var(--primary-color);
-            border-color: var(--primary-color);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-        }
-        
-        .btn-outline-primary:hover {
-            background-color: var(--primary-color);
-            color: var(--light-color);
-            transform: translateY(-2px);
-            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
-        }
-        
-        footer {
-            background-color: var(--light-color);
-            padding: 2rem 0;
-            margin-top: 3rem;
-            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
-        }
-        
-        .story-container {
-            background-color: var(--light-color);
-            border-radius: 0.5rem;
+        .story-content {
+            background-color: #fff;
+            border-radius: 1rem;
             padding: 2rem;
-            margin: 2rem 0;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 3rem;
+            font-size: 1.1rem;
+            line-height: 1.8;
         }
         
-        .child-image {
-            border-radius: 0.5rem;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            max-width: 100%;
-            height: auto;
+        .story-content p {
+            margin-bottom: 1.5rem;
         }
         
         .illustration {
-            background-color: var(--background-color);
-            border-radius: 0.5rem;
-            padding: 1rem;
-            margin: 1.5rem 0;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin: 2rem 0;
             text-align: center;
         }
         
         .illustration-image {
             max-width: 100%;
             border-radius: 0.5rem;
-            margin-bottom: 0.5rem;
-            display: block;
-            margin: 0 auto 1rem auto;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
         }
         
-        /* 3D Book Styles */
         .book-container {
             perspective: 1000px;
-            width: 100%;
-            height: 500px;
-            margin: 2rem auto;
-            position: relative;
+            width: 300px;
+            height: 450px;
+            margin: 0 auto 2rem;
         }
         
         .book {
@@ -192,109 +131,80 @@ MAIN_TEMPLATE = """
             transform: rotateY(0deg);
         }
         
-        .book-front, .book-back, .book-spine, .book-top, .book-bottom, .book-right {
+        .book-front, .book-back, .book-right, .book-left, .book-top, .book-bottom {
             position: absolute;
-            background-color: var(--light-color);
-            border-radius: 2px;
-            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
-        }
-        
-        .book-front, .book-back {
             width: 100%;
             height: 100%;
+            background-color: #0d6efd;
+            border-radius: 2px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
         }
         
         .book-front {
-            transform: translateZ(20px);
-            background-color: var(--primary-color);
-            color: var(--light-color);
-            padding: 20px;
+            transform: translateZ(25px);
+            background-color: #fff;
+            border: 2px solid #0d6efd;
             display: flex;
             flex-direction: column;
             justify-content: center;
             align-items: center;
+            padding: 20px;
             text-align: center;
-            border-radius: 5px;
-            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
         }
         
         .book-back {
-            transform: translateZ(-20px) rotateY(180deg);
-            background-color: var(--secondary-color);
-            border-radius: 5px;
-        }
-        
-        .book-spine {
-            width: 40px;
-            height: 100%;
-            transform: rotateY(90deg) translateZ(-20px);
-            background-color: var(--accent-color);
-        }
-        
-        .book-top {
-            width: 100%;
-            height: 40px;
-            transform: rotateX(90deg) translateZ(-20px);
-            background-color: var(--light-color);
-        }
-        
-        .book-bottom {
-            width: 100%;
-            height: 40px;
-            transform: rotateX(-90deg) translateZ(460px);
-            background-color: var(--light-color);
+            transform: translateZ(-25px) rotateY(180deg);
+            background-color: #0d6efd;
         }
         
         .book-right {
-            width: 40px;
-            height: 100%;
-            transform: rotateY(-90deg) translateZ(calc(100% - 20px));
-            background-color: var(--background-color);
+            width: 50px;
+            transform: rotateY(90deg) translateZ(150px);
+            background-color: #e9ecef;
         }
         
-        .book-content {
-            max-height: 400px;
-            overflow-y: auto;
-            padding: 20px;
+        .book-left {
+            width: 50px;
+            transform: rotateY(-90deg) translateZ(150px);
+            background-color: #e9ecef;
+        }
+        
+        .book-top {
+            height: 50px;
+            transform: rotateX(90deg) translateZ(150px);
+            background-color: #e9ecef;
+        }
+        
+        .book-bottom {
+            height: 50px;
+            transform: rotateX(-90deg) translateZ(300px);
+            background-color: #e9ecef;
         }
         
         .book-title {
-            font-size: 24px;
-            font-weight: bold;
-            margin-bottom: 10px;
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #0d6efd;
+            margin-bottom: 1rem;
         }
         
-        .book-author {
-            font-size: 16px;
-            margin-bottom: 20px;
-        }
-        
-        .book-cover-image {
-            max-width: 150px;
-            border-radius: 5px;
-            margin: 20px 0;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-        }
-        
-        .story-content {
-            margin-top: 2rem;
-            font-size: 1.1rem;
-            line-height: 1.8;
-        }
-        
-        /* Progress modal styles */
-        .progress-modal .modal-content {
-            border-radius: 0.5rem;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-        }
-        
-        .progress-modal .progress {
-            height: 25px;
-            border-radius: 0.25rem;
+        .book-spine {
+            position: absolute;
+            width: 50px;
+            height: 100%;
+            transform: rotateY(90deg) translateZ(25px);
+            background-color: #0d6efd;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-weight: 700;
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
         }
         
         .step-indicator {
-            display: inline-flex;
+            display: flex;
             align-items: center;
             justify-content: center;
             width: 30px;
@@ -417,82 +327,214 @@ MAIN_TEMPLATE = """
                         </div>
                     </div>
                 </div>
-                <div class="modal-footer justify-content-center">
-                    <p class="text-muted mb-0">Please wait while we create your personalized story...</p>
-                </div>
             </div>
         </div>
     </div>
 
-    <footer class="mt-5">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-6">
-                    <h5>Storybook Magic</h5>
-                    <p>Creating personalized bedtime stories for children using the power of AI.</p>
-                </div>
-                <div class="col-md-6 text-md-end">
-                    <p class="mb-0">© 2025 Storybook Magic. All rights reserved.</p>
-                </div>
-            </div>
-        </div>
-    </footer>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Global JavaScript for progress tracking
         document.addEventListener('DOMContentLoaded', function() {
-            // Initialize any global functionality here
+            // Initialize Bootstrap components
+            try {
+                // Initialize all Bootstrap tooltips
+                var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+                var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+                    return new bootstrap.Tooltip(tooltipTriggerEl)
+                });
+                
+                console.log('Bootstrap components initialized successfully');
+            } catch (error) {
+                console.error('Error initializing Bootstrap components:', error);
+            }
+            
+            // Progress bar functionality
+            const storyForm = document.getElementById('storyForm');
+            if (storyForm) {
+                console.log('Story form found, setting up event listeners');
+                
+                // Try to initialize the modal
+                let progressModal;
+                try {
+                    progressModal = new bootstrap.Modal(document.getElementById('progressModal'));
+                    console.log('Progress modal initialized successfully');
+                } catch (error) {
+                    console.error('Error initializing progress modal:', error);
+                }
+                
+                let sessionId = null;
+                let pollingInterval = null;
+                
+                storyForm.addEventListener('submit', function(e) {
+                    console.log('Form submitted');
+                    e.preventDefault();
+                    
+                    // Show progress modal immediately
+                    try {
+                        if (progressModal) {
+                            progressModal.show();
+                            console.log('Progress modal shown');
+                        } else {
+                            // Fallback if modal initialization failed
+                            document.getElementById('progressModal').classList.add('show');
+                            document.getElementById('progressModal').style.display = 'block';
+                            console.log('Progress modal shown using fallback method');
+                        }
+                    } catch (error) {
+                        console.error('Error showing progress modal:', error);
+                    }
+                    
+                    // Create FormData object
+                    const formData = new FormData(storyForm);
+                    
+                    // Submit form via AJAX
+                    fetch('/generate_ajax', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => {
+                        console.log('Response received:', response);
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Data received:', data);
+                        if (data.error) {
+                            alert('Error: ' + data.error);
+                            if (progressModal) progressModal.hide();
+                            return;
+                        }
+                        
+                        // Store session ID for polling
+                        sessionId = data.session_id;
+                        console.log('Session ID:', sessionId);
+                        
+                        // Start polling for progress updates
+                        startProgressPolling(sessionId);
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('An error occurred while submitting the form. Please try again.');
+                        if (progressModal) progressModal.hide();
+                    });
+                });
+                
+                function startProgressPolling(sessionId) {
+                    console.log('Starting progress polling for session:', sessionId);
+                    // Clear any existing interval
+                    if (pollingInterval) {
+                        clearInterval(pollingInterval);
+                    }
+                    
+                    // Poll every 1.5 seconds
+                    pollingInterval = setInterval(() => {
+                        fetch('/progress_status/' + sessionId)
+                        .then(response => response.json())
+                        .then(data => {
+                            console.log('Progress update:', data);
+                            updateProgressUI(data);
+                            
+                            // If complete, redirect to story page
+                            if (data.status === 'complete' && data.redirect_url) {
+                                console.log('Story complete, redirecting to:', data.redirect_url);
+                                clearInterval(pollingInterval);
+                                window.location.href = data.redirect_url;
+                            }
+                            
+                            // If error, show error and stop polling
+                            if (data.status === 'error') {
+                                console.error('Error in story generation:', data.message);
+                                clearInterval(pollingInterval);
+                                alert('Error: ' + data.message);
+                                if (progressModal) progressModal.hide();
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error polling progress:', error);
+                        });
+                    }, 1500);
+                }
+                
+                function updateProgressUI(data) {
+                    // Update progress bar
+                    const progressBar = document.getElementById('progressBar');
+                    if (progressBar) {
+                        progressBar.style.width = data.percent + '%';
+                        progressBar.setAttribute('aria-valuenow', data.percent);
+                        progressBar.textContent = data.percent + '%';
+                    }
+                    
+                    // Update message
+                    const progressMessage = document.getElementById('progressMessage');
+                    if (progressMessage) {
+                        progressMessage.textContent = data.message;
+                    }
+                    
+                    // Update step indicators based on current step
+                    const currentStep = data.current_step;
+                    const steps = ['Initializing', 'Analyzing image', 'Creating story', 'Generating illustrations', 'Preparing display', 'Complete'];
+                    
+                    for (let i = 1; i <= 5; i++) {
+                        const indicator = document.getElementById('step' + i + 'Indicator');
+                        const icon = document.getElementById('step' + i + 'Icon');
+                        
+                        if (indicator && icon) {
+                            // Reset classes
+                            indicator.classList.remove('completed', 'active');
+                            icon.classList.remove('bi-check-circle-fill', 'bi-circle-fill', 'bi-circle');
+                            icon.classList.remove('text-success', 'text-primary', 'text-secondary');
+                            
+                            const stepName = steps[i-1];
+                            
+                            if (currentStep === stepName) {
+                                // Current step
+                                indicator.classList.add('active');
+                                icon.classList.add('bi-circle-fill', 'text-primary');
+                            } else if (steps.indexOf(currentStep) > steps.indexOf(stepName)) {
+                                // Completed step
+                                indicator.classList.add('completed');
+                                icon.classList.add('bi-check-circle-fill', 'text-success');
+                            } else {
+                                // Future step
+                                icon.classList.add('bi-circle', 'text-secondary');
+                            }
+                        }
+                    }
+                }
+            }
         });
     </script>
-    {{ extra_js|safe }}
 </body>
 </html>
 """
 
-# HTML template for the upload page
 UPLOAD_TEMPLATE = """
-<div class="hero-section text-center mb-5">
+<div class="hero-section">
     <div class="container">
-        <h1 class="display-4 fw-bold mb-3">Create Magical Bedtime Stories</h1>
-        <p class="lead mb-4">Upload a photo of your child and we'll create a personalized bedtime story featuring them as the main character!</p>
-        <a href="#create-story" class="btn btn-primary btn-lg px-4">Get Started</a>
-    </div>
-</div>
-
-<div class="row mb-5">
-    <div class="col-md-4 mb-4">
-        <div class="card h-100">
-            <img src="https://images.unsplash.com/photo-1519340241574-2cec6aef0c01?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80" class="card-img-top" alt="Adventure">
-            <div class="card-body">
-                <h5 class="card-title">Adventure Stories</h5>
-                <p class="card-text">Exciting journeys to magical lands where your child becomes the hero of their own adventure.</p>
+        <div class="row align-items-center">
+            <div class="col-md-6">
+                <h1 class="hero-title">Create Magical Stories for Your Child</h1>
+                <p class="hero-subtitle">Upload a photo of your child and we'll create a personalized bedtime story featuring them as the main character!</p>
             </div>
-        </div>
-    </div>
-    <div class="col-md-4 mb-4">
-        <div class="card h-100">
-            <img src="https://images.unsplash.com/photo-1518826778770-a729fb53327c?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80" class="card-img-top" alt="Fantasy">
-            <div class="card-body">
-                <h5 class="card-title">Fantasy Tales</h5>
-                <p class="card-text">Enchanted worlds with dragons, wizards, and magical creatures where imagination knows no bounds.</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-4 mb-4">
-        <div class="card h-100">
-            <img src="https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80" class="card-img-top" alt="Space">
-            <div class="card-body">
-                <h5 class="card-title">Space Odysseys</h5>
-                <p class="card-text">Interstellar journeys through the cosmos where your child explores distant planets and meets aliens.</p>
+            <div class="col-md-6">
+                <div class="book-container">
+                    <div class="book">
+                        <div class="book-front">
+                            <i class="bi bi-stars text-primary mb-4" style="font-size: 3rem;"></i>
+                            <h2 class="book-title">Storybook Magic</h2>
+                            <p>Create personalized stories for your child</p>
+                        </div>
+                        <div class="book-back"></div>
+                        <div class="book-spine">Storybook Magic</div>
+                        <div class="book-right"></div>
+                        <div class="book-top"></div>
+                        <div class="book-bottom"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
-<div class="form-container" id="create-story">
-    <h2 class="text-center mb-4">Create Your Personalized Story</h2>
-    <form id="storyForm" enctype="multipart/form-data">
+<div class="form-container">
+    <form id="storyForm" action="/generate" method="post" enctype="multipart/form-data">
         <div class="mb-3">
             <label for="child_name" class="form-label">Child's Name</label>
             <input type="text" class="form-control" id="child_name" name="child_name" required>
@@ -600,12 +642,12 @@ UPLOAD_TEMPLATE = """
                     // If error, show error and stop polling
                     if (data.status === 'error') {
                         clearInterval(pollingInterval);
-                        progressModal.hide();
                         alert('Error: ' + data.message);
+                        progressModal.hide();
                     }
                 })
                 .catch(error => {
-                    console.error('Polling error:', error);
+                    console.error('Error:', error);
                 });
             }, 1500);
         }
@@ -620,84 +662,46 @@ UPLOAD_TEMPLATE = """
             // Update message
             document.getElementById('progressMessage').textContent = data.message;
             
-            // Update step indicators based on current progress
-            updateStepIndicators(data.percent);
-        }
-        
-        function updateStepIndicators(percent) {
-            // Reset all indicators
+            // Update step indicators based on current step
+            const currentStep = data.current_step;
+            const steps = ['Initializing', 'Analyzing image', 'Creating story', 'Generating illustrations', 'Preparing display', 'Complete'];
+            
             for (let i = 1; i <= 5; i++) {
                 const indicator = document.getElementById('step' + i + 'Indicator');
                 const icon = document.getElementById('step' + i + 'Icon');
                 
-                indicator.className = 'step-indicator me-2';
-                icon.className = 'bi bi-circle text-secondary';
-            }
-            
-            // Update indicators based on progress percentage
-            if (percent >= 10) {
-                document.getElementById('step1Indicator').className = 'step-indicator completed me-2';
-                document.getElementById('step1Icon').className = 'bi bi-check-circle-fill text-success';
-            }
-            
-            if (percent >= 10 && percent < 30) {
-                document.getElementById('step2Indicator').className = 'step-indicator active me-2';
-                document.getElementById('step2Icon').className = 'bi bi-arrow-right-circle-fill text-primary';
-            } else if (percent >= 30) {
-                document.getElementById('step2Indicator').className = 'step-indicator completed me-2';
-                document.getElementById('step2Icon').className = 'bi bi-check-circle-fill text-success';
-            }
-            
-            if (percent >= 30 && percent < 50) {
-                document.getElementById('step3Indicator').className = 'step-indicator active me-2';
-                document.getElementById('step3Icon').className = 'bi bi-arrow-right-circle-fill text-primary';
-            } else if (percent >= 50) {
-                document.getElementById('step3Indicator').className = 'step-indicator completed me-2';
-                document.getElementById('step3Icon').className = 'bi bi-check-circle-fill text-success';
-            }
-            
-            if (percent >= 50 && percent < 70) {
-                document.getElementById('step4Indicator').className = 'step-indicator active me-2';
-                document.getElementById('step4Icon').className = 'bi bi-arrow-right-circle-fill text-primary';
-            } else if (percent >= 70) {
-                document.getElementById('step4Indicator').className = 'step-indicator completed me-2';
-                document.getElementById('step4Icon').className = 'bi bi-check-circle-fill text-success';
-            }
-            
-            if (percent >= 70 && percent < 90) {
-                document.getElementById('step5Indicator').className = 'step-indicator active me-2';
-                document.getElementById('step5Icon').className = 'bi bi-arrow-right-circle-fill text-primary';
-            } else if (percent >= 90) {
-                document.getElementById('step5Indicator').className = 'step-indicator completed me-2';
-                document.getElementById('step5Icon').className = 'bi bi-check-circle-fill text-success';
+                // Reset classes
+                indicator.classList.remove('completed', 'active');
+                icon.classList.remove('bi-check-circle-fill', 'bi-circle-fill', 'bi-circle');
+                icon.classList.remove('text-success', 'text-primary', 'text-secondary');
+                
+                const stepName = steps[i-1];
+                
+                if (currentStep === stepName) {
+                    // Current step
+                    indicator.classList.add('active');
+                    icon.classList.add('bi-circle-fill', 'text-primary');
+                } else if (steps.indexOf(currentStep) > steps.indexOf(stepName)) {
+                    // Completed step
+                    indicator.classList.add('completed');
+                    icon.classList.add('bi-check-circle-fill', 'text-success');
+                } else {
+                    // Future step
+                    icon.classList.add('bi-circle', 'text-secondary');
+                }
             }
         }
     });
 </script>
 """
 
-# HTML template for the story page
 STORY_TEMPLATE = """
-<div class="story-container">
-    <div class="row mb-4">
-        <div class="col-md-8">
-            <h1 class="mb-3">{{ story_data["child_name"] }}'s Story</h1>
-            <div class="d-flex align-items-center mb-3">
-                <span class="badge bg-primary me-2">{{ story_data["theme"].title() }}</span>
-                <span class="badge bg-secondary me-2">{{ story_data["age_range"] }} years</span>
-            </div>
-        </div>
-        <div class="col-md-4 text-md-end">
-            <a href="/" class="btn btn-outline-primary">Create Another Story</a>
-        </div>
-    </div>
-    
-    <div class="book-container mb-5">
+<div class="mt-5 mb-5">
+    <div class="book-container">
         <div class="book">
             <div class="book-front">
+                <img src="{{ story_data['image_path'] }}" alt="Story cover image" class="img-fluid mb-3" style="max-height: 200px; border-radius: 8px;">
                 <h2 class="book-title">{{ story_data["child_name"] }}'s Adventure</h2>
-                <p class="book-author">A personalized story by Storybook Magic</p>
-                <img src="{{ story_data['image_path'] }}" alt="Book Cover" class="book-cover-image">
                 <p>A magical tale featuring {{ story_data["child_name"] }}</p>
             </div>
             <div class="book-back"></div>
@@ -922,11 +926,11 @@ def process_story_background(story_id):
                 redirect_url=url_for("show_story", story_id=story_id)
             )
         
-    except Exception as e:
-        logger.error(f"Error in process_story_background: {str(e)}", exc_info=True)
-        if story_id in stories and "session_id" in stories[story_id]:
-            session_id = stories[story_id]["session_id"]
-            update_progress(session_id, 0, f"Error: {str(e)}", "Error", status="error")
+        except Exception as e:
+            logger.error(f"Error in process_story_background: {str(e)}", exc_info=True)
+            if story_id in stories and "session_id" in stories[story_id]:
+                session_id = stories[story_id]["session_id"]
+                update_progress(session_id, 0, f"Error: {str(e)}", "Error", status="error")
 
 @app.route("/generate", methods=["POST"])
 def generate():
@@ -999,103 +1003,33 @@ def show_story(story_id):
         })
         
         # Create a waiting page with progress modal that auto-refreshes
-        waiting_html = f"""
-        <div class="text-center my-5">
-            <h2>Creating Your Story</h2>
-            <p class="lead">Please wait while we create your personalized story...</p>
+        waiting_content = f"""
+        <div class="text-center mt-5">
+            <h2>Creating Your Story...</h2>
+            <p class="lead">Please wait while we create a personalized story for {story_data["child_name"]}.</p>
+            
+            <div class="progress mt-4 mb-4" style="height: 30px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" 
+                     style="width: {progress_data['percent']}%;" 
+                     aria-valuenow="{progress_data['percent']}" aria-valuemin="0" aria-valuemax="100">
+                    {progress_data['percent']}%
+                </div>
+            </div>
+            
+            <p class="fs-5">{progress_data['message']}</p>
+            <p class="text-muted">This page will automatically update. Please don't close your browser.</p>
         </div>
         
         <script>
-            // Show progress modal on page load
-            document.addEventListener('DOMContentLoaded', function() {{
-                const progressModal = new bootstrap.Modal(document.getElementById('progressModal'));
-                progressModal.show();
-                
-                // Start polling for progress updates
-                let pollingInterval = setInterval(() => {{
-                    fetch('/progress_status/{session_id}')
-                    .then(response => response.json())
-                    .then(data => {{
-                        // Update progress UI
-                        const progressBar = document.getElementById('progressBar');
-                        progressBar.style.width = data.percent + '%';
-                        progressBar.setAttribute('aria-valuenow', data.percent);
-                        progressBar.textContent = data.percent + '%';
-                        
-                        document.getElementById('progressMessage').textContent = data.message;
-                        
-                        // Update step indicators
-                        updateStepIndicators(data.percent);
-                        
-                        // If complete, refresh the page to show the story
-                        if (data.status === 'complete') {{
-                            clearInterval(pollingInterval);
-                            window.location.reload();
-                        }}
-                    }})
-                    .catch(error => {{
-                        console.error('Polling error:', error);
-                    }});
-                }}, 1500);
-                
-                function updateStepIndicators(percent) {{
-                    // Reset all indicators
-                    for (let i = 1; i <= 5; i++) {{
-                        const indicator = document.getElementById('step' + i + 'Indicator');
-                        const icon = document.getElementById('step' + i + 'Icon');
-                        
-                        indicator.className = 'step-indicator me-2';
-                        icon.className = 'bi bi-circle text-secondary';
-                    }}
-                    
-                    // Update indicators based on progress percentage
-                    if (percent >= 10) {{
-                        document.getElementById('step1Indicator').className = 'step-indicator completed me-2';
-                        document.getElementById('step1Icon').className = 'bi bi-check-circle-fill text-success';
-                    }}
-                    
-                    if (percent >= 10 && percent < 30) {{
-                        document.getElementById('step2Indicator').className = 'step-indicator active me-2';
-                        document.getElementById('step2Icon').className = 'bi bi-arrow-right-circle-fill text-primary';
-                    }} else if (percent >= 30) {{
-                        document.getElementById('step2Indicator').className = 'step-indicator completed me-2';
-                        document.getElementById('step2Icon').className = 'bi bi-check-circle-fill text-success';
-                    }}
-                    
-                    if (percent >= 30 && percent < 50) {{
-                        document.getElementById('step3Indicator').className = 'step-indicator active me-2';
-                        document.getElementById('step3Icon').className = 'bi bi-arrow-right-circle-fill text-primary';
-                    }} else if (percent >= 50) {{
-                        document.getElementById('step3Indicator').className = 'step-indicator completed me-2';
-                        document.getElementById('step3Icon').className = 'bi bi-check-circle-fill text-success';
-                    }}
-                    
-                    if (percent >= 50 && percent < 70) {{
-                        document.getElementById('step4Indicator').className = 'step-indicator active me-2';
-                        document.getElementById('step4Icon').className = 'bi bi-arrow-right-circle-fill text-primary';
-                    }} else if (percent >= 70) {{
-                        document.getElementById('step4Indicator').className = 'step-indicator completed me-2';
-                        document.getElementById('step4Icon').className = 'bi bi-check-circle-fill text-success';
-                    }}
-                    
-                    if (percent >= 70 && percent < 90) {{
-                        document.getElementById('step5Indicator').className = 'step-indicator active me-2';
-                        document.getElementById('step5Icon').className = 'bi bi-arrow-right-circle-fill text-primary';
-                    }} else if (percent >= 90) {{
-                        document.getElementById('step5Indicator').className = 'step-indicator completed me-2';
-                        document.getElementById('step5Icon').className = 'bi bi-check-circle-fill text-success';
-                    }}
-                }}
-            }});
+            // Auto-refresh every 3 seconds
+            setTimeout(function() {{
+                window.location.reload();
+            }}, 3000);
         </script>
         """
-        
-        return render_template_string(MAIN_TEMPLATE, content=waiting_html, page_title="Creating Your Story - Storybook Magic")
+        return render_template_string(MAIN_TEMPLATE, content=waiting_content, page_title=f"{story_data['child_name']}'s Story - Creating...")
     
-    # If story is complete, show it
-    story_html_final = story_data.get("story_html_final", story_data["story_text"]) # Fallback to raw if not processed
-
-    # Pass STORY_TEMPLATE content directly to MAIN_TEMPLATE
+    # If story is complete, show the story
     content = render_template_string(STORY_TEMPLATE, story_data=story_data)
     return render_template_string(MAIN_TEMPLATE, content=content, page_title=f"{story_data['child_name']}'s Story - Storybook Magic")
 
@@ -1104,20 +1038,24 @@ def get_uploaded_image(story_id, filename):
     story_data = stories.get(story_id)
     if not story_data:
         abort(404)
-        
+    
     image_path = story_data.get("image_path")
-    if not image_path or not os.path.exists(image_path):
+    if not image_path:
         abort(404)
-        
+    
     return send_file(image_path)
 
 @app.route("/illustrations/<image_id>")
 def get_illustration_image(image_id):
-    image_path = illustration_images.get(image_id)
-    if not image_path or not os.path.exists(image_path):
-        abort(404)
-        
-    return send_file(image_path)
+    # Find the story that contains this illustration
+    for story_id, story_data in stories.items():
+        if story_id in image_id:  # Simple check if the image_id contains the story_id
+            # Look for the illustration in the story's illustration images
+            for img_id, img_path in story_data.get("illustration_images", {}).items():
+                if img_id == image_id:
+                    return send_file(img_path)
+    
+    abort(404)
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0")
+    app.run(debug=True)
