@@ -808,118 +808,119 @@ def generate_ajax():
 
 def process_story_background(story_id):
     """Background processing function for story generation."""
-    try:
-        story_data = stories.get(story_id)
-        if not story_data:
-            logger.error(f"Story not found: {story_id}")
-            return
+    with app.app_context():  # Add Flask application context
+        try:
+            story_data = stories.get(story_id)
+            if not story_data:
+                logger.error(f"Story not found: {story_id}")
+                return
+                
+            session_id = story_data["session_id"]
+            child_name = story_data["child_name"]
+            theme = story_data["theme"]
+            age_range = story_data["age_range"]
+            generate_illustrations_flag = story_data["generate_illustrations"]
+            rhyming_flag = story_data["rhyming"]
+            image_path = story_data["image_path"]
+        
+            # Encode image to base64
+            with open(image_path, "rb") as f:
+                image_data_base64 = base64.b64encode(f.read()).decode("utf-8")
+        
+            # Update progress after image processing
+            update_progress(session_id, 20, "Analyzing child's features...", "Analyzing image")
+        
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                logger.error("OPENAI_API_KEY environment variable not set.")
+                update_progress(session_id, 0, "Server configuration error: API key not set.", "Error", status="error")
+                return
             
-        session_id = story_data["session_id"]
-        child_name = story_data["child_name"]
-        theme = story_data["theme"]
-        age_range = story_data["age_range"]
-        generate_illustrations_flag = story_data["generate_illustrations"]
-        rhyming_flag = story_data["rhyming"]
-        image_path = story_data["image_path"]
-        
-        # Encode image to base64
-        with open(image_path, "rb") as f:
-            image_data_base64 = base64.b64encode(f.read()).decode("utf-8")
-        
-        # Update progress after image processing
-        update_progress(session_id, 20, "Analyzing child's features...", "Analyzing image")
-        
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            logger.error("OPENAI_API_KEY environment variable not set.")
-            update_progress(session_id, 0, "Server configuration error: API key not set.", "Error", status="error")
-            return
+            # Generate Ghibli-style image for the cover
+            update_progress(session_id, 30, "Creating Ghibli-style cover image...", "Generating cover image")
+            ghibli_image_path = generate_ghibli_style_image(image_data_base64, api_key)
+            if not ghibli_image_path:
+                logger.warning("Failed to generate Ghibli-style image, using original image as fallback.")
+                ghibli_image_path = image_path # Fallback to original if Ghibli fails
+                
+            # Update progress after Ghibli image generation
+            update_progress(session_id, 50, "Writing your personalized story...", "Creating story")
             
-        # Generate Ghibli-style image for the cover
-        update_progress(session_id, 30, "Creating Ghibli-style cover image...", "Generating cover image")
-        ghibli_image_path = generate_ghibli_style_image(image_data_base64, api_key)
-        if not ghibli_image_path:
-            logger.warning("Failed to generate Ghibli-style image, using original image as fallback.")
-            ghibli_image_path = image_path # Fallback to original if Ghibli fails
+            # Generate the story
+            story_text = generate_story(
+                child_name, 
+                image_data_base64, 
+                theme, 
+                age_range, 
+                generate_illustrations_flag,
+                rhyming_flag
+            )
+        
+            # Update story data with generated content
+            stories[story_id]["story_text"] = story_text
+            stories[story_id]["image_path"] = url_for("get_uploaded_image", story_id=story_id, filename=os.path.basename(ghibli_image_path))
+        
+            # Process illustrations if requested
+            illustration_images = {}
+            generated_illustration_paths_urls = []
+        
+            if generate_illustrations_flag:
+                update_progress(session_id, 70, "Story created! Now adding illustrations...", "Generating illustrations")
             
-        # Update progress after Ghibli image generation
-        update_progress(session_id, 50, "Writing your personalized story...", "Creating story")
-        
-        # Generate the story
-        story_text = generate_story(
-            child_name, 
-            image_data_base64, 
-            theme, 
-            age_range, 
-            generate_illustrations_flag,
-            rhyming_flag
-        )
-        
-        # Update story data with generated content
-        stories[story_id]["story_text"] = story_text
-        stories[story_id]["image_path"] = url_for("get_uploaded_image", story_id=story_id, filename=os.path.basename(ghibli_image_path))
-        
-        # Process illustrations if requested
-        illustration_images = {}
-        generated_illustration_paths_urls = []
-        
-        if generate_illustrations_flag:
-            update_progress(session_id, 70, "Story created! Now adding illustrations...", "Generating illustrations")
+                # Extract illustration descriptions from the story
+                illustration_descriptions = extract_illustration_descriptions(story_text)
             
-            # Extract illustration descriptions from the story
-            illustration_descriptions = extract_illustration_descriptions(story_text)
-            
-            # Generate illustrations for each description
-            for i, desc in enumerate(illustration_descriptions):
-                logger.info(f"Generating illustration {i+1}/{len(illustration_descriptions)}: {desc}")
-                illustration_path = generate_illustration(desc, api_key) 
-                if illustration_path:
-                    img_id = f"{story_id}_illustration_{i}"
-                    illustration_images[img_id] = illustration_path # Store the actual file path
-                    generated_illustration_paths_urls.append(url_for("get_illustration_image", image_id=img_id))
-                    logger.info(f"Illustration {i} generated: {illustration_path}, URL: {generated_illustration_paths_urls[-1]}")
-                else:
-                    generated_illustration_paths_urls.append(None)
-                    logger.warning(f"Failed to generate illustration for: {desc}")
-                    
-            # Replace placeholders in story with actual image tags or placeholders
-            story_html_parts = story_text.split("[ILLUSTRATION:")
-            processed_html = story_html_parts[0]
-            for i, part in enumerate(story_html_parts[1:]):
-                try:
-                    desc_and_rest = part.split("]", 1)
-                    original_desc_text = desc_and_rest[0]
-                    rest_of_story = desc_and_rest[1]
-                    
-                    if i < len(generated_illustration_paths_urls) and generated_illustration_paths_urls[i]:
-                        processed_html += f'<div class="illustration"><img src="{generated_illustration_paths_urls[i]}" alt="Illustration: {original_desc_text}" class="illustration-image"><p class="text-muted"><em>{original_desc_text}</em></p></div>'
+                # Generate illustrations for each description
+                for i, desc in enumerate(illustration_descriptions):
+                    logger.info(f"Generating illustration {i+1}/{len(illustration_descriptions)}: {desc}")
+                    illustration_path = generate_illustration(desc, api_key) 
+                    if illustration_path:
+                        img_id = f"{story_id}_illustration_{i}"
+                        illustration_images[img_id] = illustration_path # Store the actual file path
+                        generated_illustration_paths_urls.append(url_for("get_illustration_image", image_id=img_id))
+                        logger.info(f"Illustration {i} generated: {illustration_path}, URL: {generated_illustration_paths_urls[-1]}")
                     else:
-                        processed_html += f'<div class="illustration"><p class="text-danger"><em>Illustration for "{original_desc_text}" could not be generated.</em></p></div>'
-                    processed_html += rest_of_story
-                except IndexError:
-                    processed_html += part # Append the remainder if parsing fails
-            story_html = processed_html
-        else:
-            update_progress(session_id, 80, "Story created! Finalizing your story...", "Finalizing")
-            # Remove illustration placeholders if not generating
-            story_html = re.sub(r'\[ILLUSTRATION: (.*?)\]', '', story_text)
+                        generated_illustration_paths_urls.append(None)
+                        logger.warning(f"Failed to generate illustration for: {desc}")
+                    
+                # Replace placeholders in story with actual image tags or placeholders
+                story_html_parts = story_text.split("[ILLUSTRATION:")
+                processed_html = story_html_parts[0]
+                for i, part in enumerate(story_html_parts[1:]):
+                    try:
+                        desc_and_rest = part.split("]", 1)
+                        original_desc_text = desc_and_rest[0]
+                        rest_of_story = desc_and_rest[1]
+                        
+                        if i < len(generated_illustration_paths_urls) and generated_illustration_paths_urls[i]:
+                            processed_html += f'<div class="illustration"><img src="{generated_illustration_paths_urls[i]}" alt="Illustration: {original_desc_text}" class="illustration-image"><p class="text-muted"><em>{original_desc_text}</em></p></div>'
+                        else:
+                            processed_html += f'<div class="illustration"><p class="text-danger"><em>Illustration for "{original_desc_text}" could not be generated.</em></p></div>'
+                        processed_html += rest_of_story
+                    except IndexError:
+                        processed_html += part # Append the remainder if parsing fails
+                story_html = processed_html
+            else:
+                update_progress(session_id, 80, "Story created! Finalizing your story...", "Finalizing")
+                # Remove illustration placeholders if not generating
+                story_html = re.sub(r'\[ILLUSTRATION: (.*?)\]', '', story_text)
             
-        # Final progress update before redirecting
-        update_progress(session_id, 90, "Finalizing your story...", "Preparing display")
+            # Final progress update before redirecting
+            update_progress(session_id, 90, "Finalizing your story...", "Preparing display")
             
-        # Store the final HTML (with illustrations or removed placeholders)
-        stories[story_id]["story_html_final"] = story_html
-        stories[story_id]["status"] = "complete"
+            # Store the final HTML (with illustrations or removed placeholders)
+            stories[story_id]["story_html_final"] = story_html
+            stories[story_id]["status"] = "complete"
         
-        # Set final progress to 100% with redirect URL
-        update_progress(
-            session_id, 
-            100, 
-            "Story complete! Redirecting...", 
-            "Complete", 
-            status="complete", 
-            redirect_url=url_for("show_story", story_id=story_id)
-        )
+            # Set final progress to 100% with redirect URL
+            update_progress(
+                session_id, 
+                100, 
+                "Story complete! Redirecting...", 
+                "Complete", 
+                status="complete", 
+                redirect_url=url_for("show_story", story_id=story_id)
+            )
         
     except Exception as e:
         logger.error(f"Error in process_story_background: {str(e)}", exc_info=True)
