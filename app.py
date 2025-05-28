@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Configure Flask for URL generation outside request context
+app.config['SERVER_NAME'] = os.environ.get('SERVER_NAME', 'storys.onrender.com')
+app.config['APPLICATION_ROOT'] = os.environ.get('APPLICATION_ROOT', '/')
+app.config['PREFERRED_URL_SCHEME'] = os.environ.get('PREFERRED_URL_SCHEME', 'https')
+
 # In-memory storage for stories
 stories = {}
 story_progress = {}
