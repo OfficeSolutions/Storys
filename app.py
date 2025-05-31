@@ -7,13 +7,14 @@ import json
 import logging
 import time
 from werkzeug.utils import secure_filename
-from flask import Flask, request, render_template_string, redirect, url_for, send_file, jsonify, abort
+from flask import Flask, request, render_template_string, redirect, url_for, send_file, jsonify, abort, send_from_directory
 
 from enhanced_story_generator import (
     generate_story,
     extract_illustration_descriptions,
     generate_illustration,
-    generate_ghibli_style_image
+    generate_ghibli_style_image,
+    PERSISTENT_IMAGE_DIR
 )
 
 # Set up logging
@@ -26,6 +27,9 @@ app = Flask(__name__)
 app.config['SERVER_NAME'] = os.environ.get('SERVER_NAME', 'storys.onrender.com')
 app.config['APPLICATION_ROOT'] = os.environ.get('APPLICATION_ROOT', '/')
 app.config['PREFERRED_URL_SCHEME'] = os.environ.get('PREFERRED_URL_SCHEME', 'https')
+
+# Ensure the static directory exists
+os.makedirs(PERSISTENT_IMAGE_DIR, exist_ok=True)
 
 # In-memory storage for stories
 stories = {}
@@ -779,10 +783,9 @@ def generate_ajax():
         if not child_image_file or child_image_file.filename == "":
             return jsonify({"error": "No image file provided"})
 
-        # Save the uploaded image
+        # Save the uploaded image to the persistent directory
         filename = secure_filename(child_image_file.filename if child_image_file.filename else "uploaded_image")
-        temp_dir = tempfile.mkdtemp()
-        image_path = os.path.join(temp_dir, filename)
+        image_path = os.path.join(PERSISTENT_IMAGE_DIR, f"upload_{session_id}_{filename}")
         child_image_file.save(image_path)
 
         # Create a new story ID and store initial data
@@ -795,7 +798,8 @@ def generate_ajax():
             "generate_illustrations": generate_illustrations_flag,
             "rhyming": rhyming_flag,
             "image_path": image_path,
-            "status": "processing"
+            "status": "processing",
+            "illustration_images": {}  # Store illustration images
         }
         
         # Start background processing in a separate thread
@@ -867,7 +871,10 @@ def process_story_background(story_id):
         
             # Update story data with generated content
             stories[story_id]["story_text"] = story_text
-            stories[story_id]["image_path"] = url_for("get_uploaded_image", story_id=story_id, filename=os.path.basename(ghibli_image_path))
+            
+            # Get the filename from the path for the static URL
+            ghibli_filename = os.path.basename(ghibli_image_path)
+            stories[story_id]["image_path"] = url_for("get_static_image", filename=ghibli_filename)
         
             # Process illustrations if requested
             illustration_images = {}
@@ -885,8 +892,9 @@ def process_story_background(story_id):
                     illustration_path = generate_illustration(desc, api_key) 
                     if illustration_path:
                         img_id = f"{story_id}_illustration_{i}"
-                        illustration_images[img_id] = illustration_path # Store the actual file path
-                        generated_illustration_paths_urls.append(url_for("get_illustration_image", image_id=img_id))
+                        illustration_filename = os.path.basename(illustration_path)
+                        illustration_images[img_id] = illustration_filename  # Store just the filename
+                        generated_illustration_paths_urls.append(url_for("get_static_image", filename=illustration_filename))
                         logger.info(f"Illustration {i} generated: {illustration_path}, URL: {generated_illustration_paths_urls[-1]}")
                     else:
                         generated_illustration_paths_urls.append(None)
@@ -920,6 +928,7 @@ def process_story_background(story_id):
             # Store the final HTML (with illustrations or removed placeholders)
             stories[story_id]["story_html_final"] = story_html
             stories[story_id]["status"] = "complete"
+            stories[story_id]["illustration_images"] = illustration_images
         
             # Set final progress to 100% with redirect URL
             update_progress(
@@ -958,10 +967,9 @@ def generate():
         if not child_image_file or child_image_file.filename == "":
             return "No image file provided", 400
 
-        # Save the uploaded image
+        # Save the uploaded image to the persistent directory
         filename = secure_filename(child_image_file.filename if child_image_file.filename else "uploaded_image")
-        temp_dir = tempfile.mkdtemp()
-        image_path = os.path.join(temp_dir, filename)
+        image_path = os.path.join(PERSISTENT_IMAGE_DIR, f"upload_{session_id}_{filename}")
         child_image_file.save(image_path)
 
         # Create a new story ID and store initial data
@@ -974,7 +982,8 @@ def generate():
             "generate_illustrations": generate_illustrations_flag,
             "rhyming": rhyming_flag,
             "image_path": image_path,
-            "status": "processing"
+            "status": "processing",
+            "illustration_images": {}  # Store illustration images
         }
         
         # Start background processing in a separate thread
@@ -1038,8 +1047,14 @@ def show_story(story_id):
     content = render_template_string(STORY_TEMPLATE, story_data=story_data)
     return render_template_string(MAIN_TEMPLATE, content=content, page_title=f"{story_data['child_name']}'s Story - Storybook Magic")
 
+@app.route("/static/images/<filename>")
+def get_static_image(filename):
+    """Serve images from the persistent image directory."""
+    return send_from_directory(PERSISTENT_IMAGE_DIR, filename)
+
 @app.route("/uploads/<story_id>/<filename>")
 def get_uploaded_image(story_id, filename):
+    """Legacy route for backward compatibility."""
     story_data = stories.get(story_id)
     if not story_data:
         abort(404)
@@ -1048,17 +1063,23 @@ def get_uploaded_image(story_id, filename):
     if not image_path:
         abort(404)
     
+    # If the image_path is a URL, redirect to the static image route
+    if image_path.startswith('/static/images/'):
+        return redirect(image_path)
+    
     return send_file(image_path)
 
 @app.route("/illustrations/<image_id>")
 def get_illustration_image(image_id):
+    """Legacy route for backward compatibility."""
     # Find the story that contains this illustration
     for story_id, story_data in stories.items():
         if story_id in image_id:  # Simple check if the image_id contains the story_id
             # Look for the illustration in the story's illustration images
-            for img_id, img_path in story_data.get("illustration_images", {}).items():
-                if img_id == image_id:
-                    return send_file(img_path)
+            illustration_images = story_data.get("illustration_images", {})
+            if image_id in illustration_images:
+                filename = illustration_images[image_id]
+                return redirect(url_for("get_static_image", filename=filename))
     
     abort(404)
 

@@ -12,10 +12,18 @@ import textwrap
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Create a persistent directory for storing images
+PERSISTENT_IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "images")
+os.makedirs(PERSISTENT_IMAGE_DIR, exist_ok=True)
+logger.info(f"Using persistent image directory: {PERSISTENT_IMAGE_DIR}")
+
 def _create_placeholder_image(text, error=False):
     """Helper function to create a placeholder image with text."""
     try:
-        placeholder_path = os.path.join(tempfile.gettempdir(), f"placeholder_{hash(text)}.jpg")
+        # Use persistent directory instead of temp directory
+        filename = f"placeholder_{hash(text)}.jpg"
+        placeholder_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
+        
         img = Image.new("RGB", (1024, 1024), color=(240, 240, 240) if not error else (255, 200, 200))
         d = ImageDraw.Draw(img)
 
@@ -249,11 +257,12 @@ def generate_ghibli_style_image(image_data, api_key):
                 if image_bytes:
                     try:
                         image = Image.open(BytesIO(image_bytes))
-                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-                        image.save(temp_file.name)
-                        temp_file.close()
-                        logger.info(f"Successfully generated Ghibli-style image: {temp_file.name}")
-                        return temp_file.name
+                        # Save to persistent directory instead of temp file
+                        filename = f"ghibli_{hash(prompt)}.jpg"
+                        image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
+                        image.save(image_path)
+                        logger.info(f"Successfully generated Ghibli-style image: {image_path}")
+                        return image_path
                     except Exception as save_err:
                         logger.error(f"Error saving generated Ghibli image: {save_err}")
                         return _create_placeholder_image("Failed to save generated Ghibli-style image.", error=True)
@@ -279,86 +288,99 @@ def generate_ghibli_style_image(image_data, api_key):
                 logger.warning("Could not parse JSON from error response for Ghibli image.")
             return _create_placeholder_image(placeholder_text, error=True)
     except Exception as e:
-        logger.error(f"Error generating Ghibli-style image: {str(e)}")
-        return _create_placeholder_image(f"Ghibli-style image generation failed: {str(e)[:100]}", error=True)
+        logger.error(f"Error generating Ghibli image: {str(e)}")
+        return _create_placeholder_image(f"Error generating Ghibli-style image: {str(e)}", error=True)
+
+def extract_illustration_descriptions(story_text):
+    """Extract illustration descriptions from the story text."""
+    try:
+        logger.info("Extracting illustration descriptions from story")
+        illustration_markers = story_text.split("[ILLUSTRATION:")
+        descriptions = []
+        for i, marker in enumerate(illustration_markers):
+            if i == 0:  # Skip the first part (before any illustration marker)
+                continue
+            try:
+                description = marker.split("]")[0].strip()
+                descriptions.append(description)
+            except IndexError:
+                logger.warning(f"Malformed illustration marker: {marker[:50]}...")
+        logger.info(f"Extracted {len(descriptions)} illustration descriptions")
+        return descriptions
+    except Exception as e:
+        logger.error(f"Error extracting illustration descriptions: {str(e)}")
+        return []
 
 def generate_illustration(description, api_key):
-    """Generate an illustration based on the description using OpenAI."""
+    """Generate an illustration based on the description."""
     try:
         logger.info(f"Generating illustration for: {description[:50]}...")
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
+        
+        # Enhance the prompt for better results
+        enhanced_prompt = f"A children's book illustration showing {description}. The style is colorful, whimsical, and appealing to children. The illustration is clear, detailed, and appropriate for a bedtime story."
+        
         data = {
             "model": "gpt-image-1", # Using the specific model as requested
-            "prompt": description,
+            "prompt": enhanced_prompt,
             "n": 1,
             "quality": "low", # Using low quality as requested
             "size": "1024x1024"
         }
-        logger.info("Sending illustration generation request to OpenAI API (gpt-image-1)")
+        
         response = requests.post(
             "https://api.openai.com/v1/images/generations",
             headers=headers,
             data=json.dumps(data),
             timeout=30
         )
+        
         if response.status_code == 200:
             response_data = response.json()
-            logger.info(f"Illustration generation API response: {json.dumps(response_data)}")
             if "data" in response_data and len(response_data["data"]) > 0:
                 image_info = response_data["data"][0]
                 image_bytes = None
+                
                 if "b64_json" in image_info:
-                    logger.info("Decoding illustration from base64 data.")
                     try:
                         image_bytes = base64.b64decode(image_info["b64_json"])
                     except Exception as decode_err:
-                        logger.error(f"Error decoding base64 illustration: {decode_err}")
-                        return _create_placeholder_image(f"Failed to decode illustration data: {description[:30]}...", error=True)
-                elif "url" in image_info: # Fallback if API changes
+                        logger.error(f"Error decoding base64 image: {decode_err}")
+                        return None
+                elif "url" in image_info:
                     image_url = image_info["url"]
-                    logger.info(f"Downloading illustration from URL: {image_url}")
                     img_response = requests.get(image_url)
                     if img_response.status_code == 200:
                         image_bytes = img_response.content
                     else:
                         logger.error(f"Error downloading illustration: {img_response.status_code}")
-                        return _create_placeholder_image(f"Failed to download illustration: {description[:30]}...", error=True)
-
+                        return None
+                
                 if image_bytes:
                     try:
                         image = Image.open(BytesIO(image_bytes))
-                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-                        image.save(temp_file.name)
-                        temp_file.close()
-                        logger.info(f"Successfully generated illustration: {temp_file.name}")
-                        return temp_file.name
+                        # Save to persistent directory instead of temp file
+                        filename = f"illustration_{hash(description)}.jpg"
+                        image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
+                        image.save(image_path)
+                        logger.info(f"Successfully generated illustration: {image_path}")
+                        return image_path
                     except Exception as save_err:
                         logger.error(f"Error saving generated illustration: {save_err}")
-                        return _create_placeholder_image(f"Failed to save illustration: {description[:30]}...", error=True)
+                        return None
                 else:
-                    logger.error("No image URL or base64 data found in the illustration response item.")
-                    return _create_placeholder_image(f"Illustration generation failed (No data): {description[:30]}...", error=True)
+                    logger.error("No image data found in the response")
+                    return None
             else:
-                logger.error("No data found in the illustration generation response")
-                if response_data.get("error"):
-                     logger.error(f"API Error in illustration response: {response_data['error']}")
-                return _create_placeholder_image(f"Illustration generation failed (No data/URL). Check logs.", error=True)
+                logger.error("No data found in the image generation response")
+                return None
         else:
             logger.error(f"Error generating illustration: {response.status_code}")
             logger.error(f"Response: {response.text}")
-            return _create_placeholder_image(f"Illustration generation failed (HTTP {response.status_code}). Check logs.", error=True)
+            return None
     except Exception as e:
         logger.error(f"Error generating illustration: {str(e)}")
-        return _create_placeholder_image(f"Illustration generation failed: {str(e)[:100]}", error=True)
-
-import re
-
-def extract_illustration_descriptions(story):
-    """Extract illustration descriptions from the story text."""
-    descriptions = re.findall(r'\[ILLUSTRATION: (.*?)\]', story)
-    logger.info(f"Extracted {len(descriptions)} illustration descriptions.")
-    return descriptions
-
+        return None
