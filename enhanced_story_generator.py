@@ -3,6 +3,8 @@ import requests
 import json
 import tempfile
 import base64
+import time
+import random
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 import logging
@@ -16,6 +18,9 @@ logger = logging.getLogger(__name__)
 PERSISTENT_IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "images")
 os.makedirs(PERSISTENT_IMAGE_DIR, exist_ok=True)
 logger.info(f"Using persistent image directory: {PERSISTENT_IMAGE_DIR}")
+
+# Global variable to store child description for consistent illustrations
+child_character_description = None
 
 def _create_placeholder_image(text, error=False):
     """Helper function to create a placeholder image with text."""
@@ -55,6 +60,8 @@ def _create_placeholder_image(text, error=False):
 
 def generate_story(child_name, image_data, theme, age_range="4-6", generate_illustrations=False, rhyming=False):
     """Generate a personalized story based on the child's name, image, and theme using OpenAI."""
+    global child_character_description
+    
     try:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
@@ -76,6 +83,9 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
 
         child_description = analyze_image(image_data, api_key)
         logger.info(f"Child description: {child_description[:100]}...")
+        
+        # Store the child description globally for consistent illustrations
+        child_character_description = child_description
 
         rhyming_instruction = "The story should be written in rhyming verse, with a consistent rhythm and rhyme scheme appropriate for a bedtime story." if rhyming else ""
         illustration_instruction = "Include 4-6 places in the story where illustrations would be appropriate. Mark these with [ILLUSTRATION: brief description of the illustration]. Make the illustrations descriptions detailed and specific to the story, and include the child's visual characteristics in each illustration description." if generate_illustrations else ""
@@ -313,74 +323,135 @@ def extract_illustration_descriptions(story_text):
 
 def generate_illustration(description, api_key):
     """Generate an illustration based on the description."""
+    global child_character_description
+    
     try:
         logger.info(f"Generating illustration for: {description[:50]}...")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
         
-        # Enhance the prompt for better results
-        enhanced_prompt = f"A children's book illustration showing {description}. The style is colorful, whimsical, and appealing to children. The illustration is clear, detailed, and appropriate for a bedtime story."
+        # Implement exponential backoff for rate limiting
+        max_retries = 5
+        base_delay = 2  # Start with a 2-second delay
         
-        data = {
-            "model": "gpt-image-1", # Using the specific model as requested
-            "prompt": enhanced_prompt,
-            "n": 1,
-            "quality": "low", # Using low quality as requested
-            "size": "1024x1024"
-        }
-        
-        response = requests.post(
-            "https://api.openai.com/v1/images/generations",
-            headers=headers,
-            data=json.dumps(data),
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            response_data = response.json()
-            if "data" in response_data and len(response_data["data"]) > 0:
-                image_info = response_data["data"][0]
-                image_bytes = None
+        for attempt in range(max_retries):
+            try:
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}"
+                }
                 
-                if "b64_json" in image_info:
-                    try:
-                        image_bytes = base64.b64decode(image_info["b64_json"])
-                    except Exception as decode_err:
-                        logger.error(f"Error decoding base64 image: {decode_err}")
-                        return None
-                elif "url" in image_info:
-                    image_url = image_info["url"]
-                    img_response = requests.get(image_url)
-                    if img_response.status_code == 200:
-                        image_bytes = img_response.content
-                    else:
-                        logger.error(f"Error downloading illustration: {img_response.status_code}")
-                        return None
+                # Use the global child description for consistency
+                character_desc = child_character_description or "a young child"
                 
-                if image_bytes:
-                    try:
-                        image = Image.open(BytesIO(image_bytes))
-                        # Save to persistent directory instead of temp file
-                        filename = f"illustration_{hash(description)}.jpg"
-                        image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
-                        image.save(image_path)
-                        logger.info(f"Successfully generated illustration: {image_path}")
-                        return image_path
-                    except Exception as save_err:
-                        logger.error(f"Error saving generated illustration: {save_err}")
-                        return None
+                # Enhanced prompt for consistent character appearance
+                enhanced_prompt = f"""A children's book illustration showing {description}. 
+
+The main child character MUST have these consistent features: {character_desc}
+
+The illustration style MUST be:
+- Colorful and whimsical
+- Consistent with previous illustrations in the same story
+- Child-friendly with soft edges and warm colors
+- Clear, detailed, and appropriate for a bedtime story
+- In the style of classic children's book illustrations
+
+Maintain character consistency throughout all illustrations."""
+                
+                data = {
+                    "model": "gpt-image-1",
+                    "prompt": enhanced_prompt,
+                    "n": 1,
+                    "quality": "low",
+                    "size": "1024x1024"
+                }
+                
+                # Add delay between requests to avoid rate limiting
+                # Increase delay with each retry (exponential backoff)
+                if attempt > 0:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    logger.info(f"Rate limit retry {attempt+1}/{max_retries}, waiting {delay:.2f} seconds")
+                    time.sleep(delay)
                 else:
-                    logger.error("No image data found in the response")
-                    return None
-            else:
-                logger.error("No data found in the image generation response")
-                return None
-        else:
-            logger.error(f"Error generating illustration: {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            return None
+                    # Small delay even on first attempt to space out requests
+                    time.sleep(base_delay)
+                
+                response = requests.post(
+                    "https://api.openai.com/v1/images/generations",
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    response_data = response.json()
+                    if "data" in response_data and len(response_data["data"]) > 0:
+                        image_info = response_data["data"][0]
+                        image_bytes = None
+                        
+                        if "b64_json" in image_info:
+                            try:
+                                image_bytes = base64.b64decode(image_info["b64_json"])
+                            except Exception as decode_err:
+                                logger.error(f"Error decoding base64 image: {decode_err}")
+                                continue  # Try again
+                        elif "url" in image_info:
+                            image_url = image_info["url"]
+                            img_response = requests.get(image_url)
+                            if img_response.status_code == 200:
+                                image_bytes = img_response.content
+                            else:
+                                logger.error(f"Error downloading illustration: {img_response.status_code}")
+                                continue  # Try again
+                        
+                        if image_bytes:
+                            try:
+                                image = Image.open(BytesIO(image_bytes))
+                                # Save to persistent directory with unique filename
+                                filename = f"illustration_{hash(description)}_{int(time.time())}.jpg"
+                                image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
+                                image.save(image_path)
+                                logger.info(f"Successfully generated illustration: {image_path}")
+                                return image_path
+                            except Exception as save_err:
+                                logger.error(f"Error saving generated illustration: {save_err}")
+                                continue  # Try again
+                        else:
+                            logger.error("No image data found in the response")
+                            continue  # Try again
+                    else:
+                        logger.error("No data found in the image generation response")
+                        continue  # Try again
+                
+                elif response.status_code == 429:  # Rate limit error
+                    response_data = response.json()
+                    error_message = response_data.get("error", {}).get("message", "Rate limit exceeded")
+                    logger.warning(f"Rate limit error: {error_message}")
+                    
+                    # Extract wait time if available in the error message
+                    import re
+                    wait_time_match = re.search(r"after (\d+\.?\d*) seconds", error_message)
+                    if wait_time_match:
+                        wait_time = float(wait_time_match.group(1)) + 1  # Add a buffer second
+                        logger.info(f"Waiting {wait_time} seconds as specified in rate limit message")
+                        time.sleep(wait_time)
+                    
+                    continue  # Try again after waiting
+                
+                else:
+                    logger.error(f"Error generating illustration: {response.status_code}")
+                    logger.error(f"Response: {response.text}")
+                    
+                    # If it's not a rate limit error, don't retry
+                    if response.status_code != 429:
+                        break
+            
+            except Exception as request_err:
+                logger.error(f"Request error on attempt {attempt+1}: {str(request_err)}")
+                time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
+        
+        # If we've exhausted all retries or encountered a non-retryable error
+        logger.error(f"Failed to generate illustration after {max_retries} attempts")
+        return None
+        
     except Exception as e:
         logger.error(f"Error generating illustration: {str(e)}")
         return None
