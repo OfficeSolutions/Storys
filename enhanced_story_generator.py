@@ -19,8 +19,9 @@ PERSISTENT_IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 os.makedirs(PERSISTENT_IMAGE_DIR, exist_ok=True)
 logger.info(f"Using persistent image directory: {PERSISTENT_IMAGE_DIR}")
 
-# Global variable to store child description for consistent illustrations
+# Global variables to store child description and appearance details for consistent illustrations
 child_character_description = None
+child_appearance_details = {}
 
 def _create_placeholder_image(text, error=False):
     """Helper function to create a placeholder image with text."""
@@ -60,7 +61,7 @@ def _create_placeholder_image(text, error=False):
 
 def generate_story(child_name, image_data, theme, age_range="4-6", generate_illustrations=False, rhyming=False):
     """Generate a personalized story based on the child's name, image, and theme using OpenAI."""
-    global child_character_description
+    global child_character_description, child_appearance_details
     
     try:
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -86,6 +87,9 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         
         # Store the child description globally for consistent illustrations
         child_character_description = child_description
+        
+        # Extract and store specific appearance details for stronger consistency
+        extract_appearance_details(child_description)
 
         rhyming_instruction = "The story should be written in rhyming verse, with a consistent rhythm and rhyme scheme appropriate for a bedtime story." if rhyming else ""
         illustration_instruction = "Include 4-6 places in the story where illustrations would be appropriate. Mark these with [ILLUSTRATION: brief description of the illustration]. Make the illustrations descriptions detailed and specific to the story, and include the child's visual characteristics in each illustration description." if generate_illustrations else ""
@@ -173,6 +177,92 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         The End.
         """
         return fallback_story
+
+def extract_appearance_details(description):
+    """Extract specific appearance details from the child description for stronger consistency."""
+    global child_appearance_details
+    
+    try:
+        logger.info("Extracting specific appearance details for consistency")
+        
+        # Reset appearance details
+        child_appearance_details = {
+            "hair_color": "unknown",
+            "hair_style": "unknown",
+            "eye_color": "unknown",
+            "skin_tone": "unknown",
+            "clothing": "unknown",
+            "distinctive_features": "unknown"
+        }
+        
+        # Extract hair color
+        hair_color_patterns = [
+            r"(blonde|blond|brown|black|red|auburn|ginger|gray|white) hair",
+            r"hair is (blonde|blond|brown|black|red|auburn|ginger|gray|white)",
+            r"(blonde|blond|brown|black|red|auburn|ginger|gray|white)-haired"
+        ]
+        
+        for pattern in hair_color_patterns:
+            import re
+            match = re.search(pattern, description.lower())
+            if match:
+                child_appearance_details["hair_color"] = match.group(1)
+                break
+        
+        # Extract hair style
+        hair_style_patterns = [
+            r"(curly|wavy|straight|short|long|medium-length|braided|ponytail|pigtails) hair",
+            r"hair is (curly|wavy|straight|short|long|medium-length|braided|in a ponytail|in pigtails)"
+        ]
+        
+        for pattern in hair_style_patterns:
+            match = re.search(pattern, description.lower())
+            if match:
+                child_appearance_details["hair_style"] = match.group(1)
+                break
+        
+        # Extract eye color
+        eye_color_patterns = [
+            r"(blue|green|brown|hazel|gray|amber) eyes",
+            r"eyes are (blue|green|brown|hazel|gray|amber)"
+        ]
+        
+        for pattern in eye_color_patterns:
+            match = re.search(pattern, description.lower())
+            if match:
+                child_appearance_details["eye_color"] = match.group(1)
+                break
+        
+        # Extract skin tone
+        skin_tone_patterns = [
+            r"(fair|light|pale|tan|medium|olive|brown|dark) skin",
+            r"skin is (fair|light|pale|tan|medium|olive|brown|dark)"
+        ]
+        
+        for pattern in skin_tone_patterns:
+            match = re.search(pattern, description.lower())
+            if match:
+                child_appearance_details["skin_tone"] = match.group(1)
+                break
+        
+        # Extract clothing (more complex, just look for clothing-related sentences)
+        clothing_patterns = [
+            r"wearing ([^\.]+)",
+            r"dressed in ([^\.]+)"
+        ]
+        
+        for pattern in clothing_patterns:
+            match = re.search(pattern, description.lower())
+            if match:
+                child_appearance_details["clothing"] = match.group(1)
+                break
+        
+        # Log the extracted details
+        logger.info(f"Extracted appearance details: {json.dumps(child_appearance_details)}")
+        
+    except Exception as e:
+        logger.error(f"Error extracting appearance details: {str(e)}")
+        # Keep default values if extraction fails
 
 def analyze_image(image_data, api_key):
     """Analyze the image to extract details about the child."""
@@ -307,23 +397,34 @@ def extract_illustration_descriptions(story_text):
         logger.info("Extracting illustration descriptions from story")
         illustration_markers = story_text.split("[ILLUSTRATION:")
         descriptions = []
+        story_segments = []
+        
+        # Extract the first part of the story (before any illustrations)
+        if len(illustration_markers) > 0:
+            story_segments.append(illustration_markers[0])
+        
         for i, marker in enumerate(illustration_markers):
             if i == 0:  # Skip the first part (before any illustration marker)
                 continue
             try:
-                description = marker.split("]")[0].strip()
-                descriptions.append(description)
+                # Split the marker into description and remaining text
+                parts = marker.split("]", 1)
+                if len(parts) == 2:
+                    description = parts[0].strip()
+                    descriptions.append(description)
+                    story_segments.append(parts[1])
             except IndexError:
                 logger.warning(f"Malformed illustration marker: {marker[:50]}...")
+                
         logger.info(f"Extracted {len(descriptions)} illustration descriptions")
-        return descriptions
+        return descriptions, story_segments
     except Exception as e:
         logger.error(f"Error extracting illustration descriptions: {str(e)}")
-        return []
+        return [], []
 
-def generate_illustration(description, api_key):
-    """Generate an illustration based on the description."""
-    global child_character_description
+def generate_illustration(description, api_key, story_text=None):
+    """Generate an illustration based on the description with optional story text overlay."""
+    global child_character_description, child_appearance_details
     
     try:
         logger.info(f"Generating illustration for: {description[:50]}...")
@@ -342,10 +443,36 @@ def generate_illustration(description, api_key):
                 # Use the global child description for consistency
                 character_desc = child_character_description or "a young child"
                 
+                # Build a detailed appearance specification for absolute consistency
+                appearance_spec = ""
+                if child_appearance_details:
+                    appearance_items = []
+                    for key, value in child_appearance_details.items():
+                        if value != "unknown":
+                            if key == "hair_color":
+                                appearance_items.append(f"EXACTLY {value} hair color")
+                            elif key == "hair_style":
+                                appearance_items.append(f"EXACTLY {value} hair style")
+                            elif key == "eye_color":
+                                appearance_items.append(f"EXACTLY {value} eye color")
+                            elif key == "skin_tone":
+                                appearance_items.append(f"EXACTLY {value} skin tone")
+                            elif key == "clothing":
+                                appearance_items.append(f"EXACTLY the same clothing: {value}")
+                            elif key == "distinctive_features" and value != "unknown":
+                                appearance_items.append(f"EXACTLY the same distinctive features: {value}")
+                    
+                    if appearance_items:
+                        appearance_spec = "CRITICAL CHARACTER CONSISTENCY REQUIREMENTS:\n" + "\n".join(appearance_items)
+                
                 # Enhanced prompt for consistent character appearance
                 enhanced_prompt = f"""A children's book illustration showing {description}. 
 
-The main child character MUST have these consistent features: {character_desc}
+THE MAIN CHARACTER MUST LOOK EXACTLY THE SAME AS IN ALL OTHER ILLUSTRATIONS IN THIS STORY.
+
+{appearance_spec}
+
+Full character description: {character_desc}
 
 The illustration style MUST be:
 - Colorful and whimsical
@@ -354,7 +481,8 @@ The illustration style MUST be:
 - Clear, detailed, and appropriate for a bedtime story
 - In the style of classic children's book illustrations
 
-Maintain character consistency throughout all illustrations."""
+CRITICAL: Maintain EXACT character consistency throughout all illustrations - same face, same hair, same clothes, same colors.
+"""
                 
                 data = {
                     "model": "gpt-image-1",
@@ -405,6 +533,11 @@ Maintain character consistency throughout all illustrations."""
                         if image_bytes:
                             try:
                                 image = Image.open(BytesIO(image_bytes))
+                                
+                                # Add story text overlay if provided
+                                if story_text:
+                                    image = add_text_overlay(image, story_text)
+                                
                                 # Save to persistent directory with unique filename
                                 filename = f"illustration_{hash(description)}_{int(time.time())}.jpg"
                                 image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
@@ -455,3 +588,98 @@ Maintain character consistency throughout all illustrations."""
     except Exception as e:
         logger.error(f"Error generating illustration: {str(e)}")
         return None
+
+def add_text_overlay(image, text):
+    """Add text overlay to an illustration."""
+    try:
+        logger.info("Adding text overlay to illustration")
+        
+        # Create a copy of the image to avoid modifying the original
+        img_with_text = image.copy()
+        draw = ImageDraw.Draw(img_with_text)
+        
+        # Attempt to load a font, fallback to default if not found
+        try:
+            # Using a common font path, adjust if needed
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+            small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+        except IOError:
+            font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+        
+        # Create semi-transparent background for text
+        width, height = img_with_text.size
+        overlay = Image.new('RGBA', (width, int(height * 0.25)), (0, 0, 0, 180))
+        
+        # Wrap text to fit the width
+        max_width = width - 40  # 20px padding on each side
+        wrapped_text = textwrap.fill(text, width=60)
+        
+        # If text is too long, truncate and add ellipsis
+        lines = wrapped_text.split('\n')
+        if len(lines) > 5:
+            wrapped_text = '\n'.join(lines[:4]) + '\n...'
+            
+        # Calculate text position (centered horizontally, at the bottom of the image)
+        text_bbox = draw.textbbox((0, 0), wrapped_text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        
+        # Position the overlay at the bottom of the image
+        img_with_text.paste(overlay, (0, height - int(height * 0.25)), overlay)
+        
+        # Draw the text on the overlay
+        position = ((width - text_width) // 2, height - int(height * 0.25) + 20)
+        draw.text(position, wrapped_text, fill=(255, 255, 255), font=font)
+        
+        logger.info("Successfully added text overlay to illustration")
+        return img_with_text
+        
+    except Exception as e:
+        logger.error(f"Error adding text overlay: {str(e)}")
+        # Return the original image if overlay fails
+        return image
+
+def generate_illustrations_with_text(story_text, api_key):
+    """Generate illustrations with corresponding story text overlays."""
+    try:
+        logger.info("Generating illustrations with text overlays")
+        
+        # Extract illustration descriptions and story segments
+        descriptions, story_segments = extract_illustration_descriptions(story_text)
+        
+        illustration_paths = []
+        
+        for i, description in enumerate(descriptions):
+            # Get the corresponding story segment for this illustration
+            story_segment = story_segments[i] if i < len(story_segments) else ""
+            
+            # Extract a relevant portion of text for the overlay (first paragraph or sentence)
+            overlay_text = ""
+            if story_segment:
+                # Try to get the first paragraph
+                paragraphs = story_segment.split('\n\n')
+                if paragraphs:
+                    first_para = paragraphs[0].strip()
+                    # If paragraph is too long, get just the first sentence
+                    if len(first_para) > 200:
+                        sentences = first_para.split('.')
+                        if sentences:
+                            overlay_text = sentences[0].strip() + "."
+                    else:
+                        overlay_text = first_para
+            
+            # Generate illustration with text overlay
+            illustration_path = generate_illustration(description, api_key, overlay_text)
+            
+            if illustration_path:
+                illustration_paths.append(illustration_path)
+                logger.info(f"Generated illustration {i+1}/{len(descriptions)} with text overlay")
+            else:
+                logger.error(f"Failed to generate illustration {i+1}/{len(descriptions)}")
+        
+        return illustration_paths
+        
+    except Exception as e:
+        logger.error(f"Error generating illustrations with text: {str(e)}")
+        return []
