@@ -27,7 +27,8 @@ def _create_placeholder_image(text, error=False):
     """Helper function to create a placeholder image with text."""
     try:
         # Use persistent directory instead of temp directory
-        filename = f"placeholder_{hash(text)}.jpg"
+        # Ensure text is converted to string before hashing
+        filename = f"placeholder_{hash(str(text))}.jpg"
         placeholder_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
         
         img = Image.new("RGB", (1024, 1024), color=(240, 240, 240) if not error else (255, 200, 200))
@@ -41,7 +42,7 @@ def _create_placeholder_image(text, error=False):
             font = ImageFont.load_default()
 
         # Wrap text
-        wrapped_text = textwrap.fill(text, width=40)
+        wrapped_text = textwrap.fill(str(text), width=40)
 
         # Calculate text position (centered)
         text_bbox = d.textbbox((0, 0), wrapped_text, font=font)
@@ -358,7 +359,8 @@ def generate_ghibli_style_image(image_data, api_key):
                     try:
                         image = Image.open(BytesIO(image_bytes))
                         # Save to persistent directory instead of temp file
-                        filename = f"ghibli_{hash(prompt)}.jpg"
+                        # Ensure prompt is converted to string before hashing
+                        filename = f"ghibli_{hash(str(prompt))}.jpg"
                         image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
                         image.save(image_path)
                         logger.info(f"Successfully generated Ghibli-style image: {image_path}")
@@ -539,7 +541,15 @@ CRITICAL: Maintain EXACT character consistency throughout all illustrations - sa
                                     image = add_text_overlay(image, story_text)
                                 
                                 # Save to persistent directory with unique filename
-                                filename = f"illustration_{hash(description)}_{int(time.time())}.jpg"
+                                # FIX: Convert all variables to strings before hashing to avoid unhashable type errors
+                                # Ensure description and story_text are properly stringified
+                                desc_str = str(description) if description else ""
+                                story_str = str(story_text) if story_text else ""
+                                timestamp = str(time.time())
+                                
+                                # Create a unique hash from stringified values
+                                unique_hash = hash(desc_str + story_str + timestamp)
+                                filename = f"illustration_{unique_hash}.jpg"
                                 image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
                                 image.save(image_path)
                                 logger.info(f"Successfully generated illustration: {image_path}")
@@ -564,7 +574,7 @@ CRITICAL: Maintain EXACT character consistency throughout all illustrations - sa
                     wait_time_match = re.search(r"after (\d+\.?\d*) seconds", error_message)
                     if wait_time_match:
                         wait_time = float(wait_time_match.group(1)) + 1  # Add a buffer second
-                        logger.info(f"Waiting {wait_time} seconds as specified in rate limit message")
+                        logger.info(f"Rate limit retry {attempt+1}/{max_retries}, waiting {wait_time} seconds")
                         time.sleep(wait_time)
                     
                     continue  # Try again after waiting
@@ -613,7 +623,7 @@ def add_text_overlay(image, text):
         
         # Wrap text to fit the width
         max_width = width - 40  # 20px padding on each side
-        wrapped_text = textwrap.fill(text, width=60)
+        wrapped_text = textwrap.fill(str(text), width=60)
         
         # If text is too long, truncate and add ellipsis
         lines = wrapped_text.split('\n')
