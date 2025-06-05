@@ -93,7 +93,9 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         extract_appearance_details(child_description)
 
         rhyming_instruction = "The story should be written in rhyming verse, with a consistent rhythm and rhyme scheme appropriate for a bedtime story." if rhyming else ""
-        illustration_instruction = "Include 4-6 places in the story where illustrations would be appropriate. Mark these with [ILLUSTRATION: brief description of the illustration]. Make the illustrations descriptions detailed and specific to the story, and include the child's visual characteristics in each illustration description." if generate_illustrations else ""
+        
+        # Modified to create a single scene description for the story image
+        illustration_instruction = "Include ONE vivid scene description that captures the essence of the story. Mark this with [STORY_SCENE: detailed description of the scene]. This scene should include the child character and represent the main theme or climax of the story." if generate_illustrations else ""
 
         prompt = f"""
         Create a personalized bedtime story for a child named {child_name}.
@@ -155,26 +157,24 @@ def generate_story(child_name, image_data, theme, age_range="4-6", generate_illu
         elif age_range == "4-6": story_length = "medium-length"
         elif age_range == "6-8": story_length = "longer"
         else: story_length = "elaborate"
-        fallback_illustrations = []
-        if generate_illustrations:
-            fallback_illustrations.append("[ILLUSTRATION: A child with features similar to the uploaded photo, standing in front of a magical glowing door that leads to a " + theme + " world]")
-            fallback_illustrations.append("[ILLUSTRATION: " + child_name + " meeting colorful, friendly creatures in a fantastical " + theme + " landscape with amazing details]")
-            fallback_illustrations.append("[ILLUSTRATION: An overhead view of " + child_name + " traveling through a varied landscape with mountains, valleys, and a mysterious forest]")
-            fallback_illustrations.append("[ILLUSTRATION: " + child_name + " standing bravely with new friends, facing a challenge together in the " + theme + " world]")
-            fallback_illustrations.append("[ILLUSTRATION: " + child_name + " back at home, excitedly telling their story to family members who listen with wonder]")
+        
+        # Modified to include a single scene description
+        scene_description = f"[STORY_SCENE: {child_name} standing in a magical {theme} landscape with glowing lights, surrounded by friendly creatures. The scene captures the wonder in {child_name}'s eyes as they discover the magic of this new world.]"
+        
         fallback_story = f"""
         # {child_name}'s {theme.title()} Adventure
+        
         Once upon a time, there was a child named {child_name} who loved {theme} adventures.
         One day, {child_name} discovered a magical door that led to a world of {theme}.
-        {fallback_illustrations[0] if len(fallback_illustrations) > 0 else ''}
+        
         In this world, {child_name} met friendly creatures who became their guides.
-        {fallback_illustrations[1] if len(fallback_illustrations) > 1 else ''}
         {child_name} embarked on a {story_length} journey through mountains, valleys, and mysterious forests.
-        {fallback_illustrations[2] if len(fallback_illustrations) > 2 else ''}
+        
         After many exciting adventures, {child_name} learned the importance of courage and friendship.
-        {fallback_illustrations[3] if len(fallback_illustrations) > 3 else ''}
         When {child_name} returned home, they couldn't wait to share their amazing story with everyone.
-        {fallback_illustrations[4] if len(fallback_illustrations) > 4 else ''}
+        
+        {scene_description}
+        
         The End.
         """
         return fallback_story
@@ -308,128 +308,36 @@ def analyze_image(image_data, api_key):
         logger.error(f"Error analyzing image: {str(e)}")
         return "a young child with a bright smile"
 
-def generate_ghibli_style_image(image_data, api_key):
-    """Generate a Studio Ghibli style image based on the uploaded photo."""
+def extract_story_scene(story_text):
+    """Extract the story scene description from the story text."""
     try:
-        logger.info("Generating Ghibli-style main image")
-        child_description = analyze_image(image_data, api_key)
-        prompt = f"A heartwarming Studio Ghibli style illustration suitable for a children's book cover. The scene features a child character inspired by the following description: {child_description}. Emphasize a magical, whimsical atmosphere with soft colors, enchanting details, and a sense of gentle wonder. Ensure the depiction is innocent and universally appealing."
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        data = {
-            "model": "gpt-image-1", # Using the specific model as requested
-            "prompt": prompt,
-            "n": 1,
-            "quality": "low", # Using low quality as requested
-            "size": "1024x1024"
-        }
-        logger.info("Sending Ghibli image generation request to OpenAI API (gpt-image-1)")
-        response = requests.post(
-            "https://api.openai.com/v1/images/generations",
-            headers=headers,
-            data=json.dumps(data),
-            timeout=30
-        )
-        if response.status_code == 200:
-            response_data = response.json()
-            logger.info(f"Ghibli image generation API response: {json.dumps(response_data)}")
-            if "data" in response_data and len(response_data["data"]) > 0:
-                image_info = response_data["data"][0]
-                image_bytes = None
-                if "b64_json" in image_info:
-                    logger.info("Decoding Ghibli image from base64 data.")
-                    try:
-                        image_bytes = base64.b64decode(image_info["b64_json"])
-                    except Exception as decode_err:
-                        logger.error(f"Error decoding base64 image: {decode_err}")
-                        return _create_placeholder_image("Failed to decode Ghibli-style image data.", error=True)
-                elif "url" in image_info: # Fallback if API changes
-                    image_url = image_info["url"]
-                    logger.info(f"Downloading Ghibli image from URL: {image_url}")
-                    img_response = requests.get(image_url)
-                    if img_response.status_code == 200:
-                        image_bytes = img_response.content
-                    else:
-                        logger.error(f"Error downloading Ghibli image: {img_response.status_code}")
-                        return _create_placeholder_image("Failed to download Ghibli-style image.", error=True)
-
-                if image_bytes:
-                    try:
-                        image = Image.open(BytesIO(image_bytes))
-                        # Save to persistent directory instead of temp file
-                        # Ensure prompt is converted to string before hashing
-                        filename = f"ghibli_{hash(str(prompt))}.jpg"
-                        image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
-                        image.save(image_path)
-                        logger.info(f"Successfully generated Ghibli-style image: {image_path}")
-                        return image_path
-                    except Exception as save_err:
-                        logger.error(f"Error saving generated Ghibli image: {save_err}")
-                        return _create_placeholder_image("Failed to save generated Ghibli-style image.", error=True)
-                else:
-                    logger.error("No image URL or base64 data found in the response item.")
-                    return _create_placeholder_image("Ghibli-style image generation failed (No data). Check logs.", error=True)
-            else:
-                logger.error("No data found in the image generation response")
-                if response_data.get("error"):
-                     logger.error(f"API Error in response: {response_data['error']}")
-                return _create_placeholder_image("Ghibli-style image generation failed (No data/URL). Check logs.", error=True)
-        else:
-            logger.error(f"Error generating Ghibli image: {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            placeholder_text = f"Ghibli-style image generation failed (HTTP {response.status_code}). The original image will be used."
-            try:
-                response_data = response.json()
-                error_message_from_api = response_data.get("error", {}).get("message", "")
-                if "safety system" in error_message_from_api.lower():
-                    logger.warning(f"Ghibli image rejected by safety system: {error_message_from_api}")
-                    placeholder_text = "The Ghibli-style image was not created due to content safety guidelines. The original image will be used instead."
-            except json.JSONDecodeError:
-                logger.warning("Could not parse JSON from error response for Ghibli image.")
-            return _create_placeholder_image(placeholder_text, error=True)
-    except Exception as e:
-        logger.error(f"Error generating Ghibli image: {str(e)}")
-        return _create_placeholder_image(f"Error generating Ghibli-style image: {str(e)}", error=True)
-
-def extract_illustration_descriptions(story_text):
-    """Extract illustration descriptions from the story text."""
-    try:
-        logger.info("Extracting illustration descriptions from story")
-        illustration_markers = story_text.split("[ILLUSTRATION:")
-        descriptions = []
-        story_segments = []
+        logger.info("Extracting story scene description")
+        scene_marker = story_text.split("[STORY_SCENE:")
         
-        # Extract the first part of the story (before any illustrations)
-        if len(illustration_markers) > 0:
-            story_segments.append(illustration_markers[0])
+        if len(scene_marker) > 1:
+            # Split the marker into description and remaining text
+            parts = scene_marker[1].split("]", 1)
+            if len(parts) > 0:
+                description = parts[0].strip()
+                logger.info(f"Extracted story scene description: {description[:50]}...")
+                return description
         
-        for i, marker in enumerate(illustration_markers):
-            if i == 0:  # Skip the first part (before any illustration marker)
-                continue
-            try:
-                # Split the marker into description and remaining text
-                parts = marker.split("]", 1)
-                if len(parts) == 2:
-                    description = parts[0].strip()
-                    descriptions.append(description)
-                    story_segments.append(parts[1])
-            except IndexError:
-                logger.warning(f"Malformed illustration marker: {marker[:50]}...")
-                
-        logger.info(f"Extracted {len(descriptions)} illustration descriptions")
-        return descriptions, story_segments
+        # If no scene marker found, create a generic description
+        logger.warning("No story scene marker found, using generic description")
+        return "A magical scene from the story with the child as the main character"
     except Exception as e:
-        logger.error(f"Error extracting illustration descriptions: {str(e)}")
-        return [], []
+        logger.error(f"Error extracting story scene: {str(e)}")
+        return "A magical scene from the story with the child as the main character"
 
-def generate_illustration(description, api_key, story_text=None):
-    """Generate an illustration based on the description with optional story text overlay."""
+def generate_story_image(story_text, api_key):
+    """Generate a single high-quality image for the entire story with text overlay."""
     global child_character_description, child_appearance_details
     
     try:
-        logger.info(f"Generating illustration for: {description[:50]}...")
+        logger.info("Generating single high-quality story image")
+        
+        # Extract the scene description from the story
+        scene_description = extract_story_scene(story_text)
         
         # Implement exponential backoff for rate limiting
         max_retries = 5
@@ -467,35 +375,33 @@ def generate_illustration(description, api_key, story_text=None):
                     if appearance_items:
                         appearance_spec = "CRITICAL CHARACTER CONSISTENCY REQUIREMENTS:\n" + "\n".join(appearance_items)
                 
-                # Enhanced prompt for consistent character appearance
-                enhanced_prompt = f"""A children's book illustration showing {description}. 
-
-THE MAIN CHARACTER MUST LOOK EXACTLY THE SAME AS IN ALL OTHER ILLUSTRATIONS IN THIS STORY.
-
-{appearance_spec}
+                # Enhanced prompt for high-quality story image
+                enhanced_prompt = f"""A high-quality children's book illustration showing: {scene_description}
 
 Full character description: {character_desc}
 
+{appearance_spec}
+
 The illustration style MUST be:
 - Colorful and whimsical
-- Consistent with previous illustrations in the same story
 - Child-friendly with soft edges and warm colors
 - Clear, detailed, and appropriate for a bedtime story
-- In the style of classic children's book illustrations
+- In the style of classic children's book illustrations with modern aesthetics
+- High quality with good composition and lighting
+- Suitable for text overlay
 
-CRITICAL: Maintain EXACT character consistency throughout all illustrations - same face, same hair, same clothes, same colors.
+Create a beautiful, engaging scene that captures the essence of the story.
 """
                 
                 data = {
                     "model": "gpt-image-1",
                     "prompt": enhanced_prompt,
                     "n": 1,
-                    "quality": "low",
-                    "size": "1024x1024"
+                    "quality": "hd",  # Using high quality for the single story image
+                    "size": "1792x1024"  # Using a wider format for better text overlay
                 }
                 
                 # Add delay between requests to avoid rate limiting
-                # Increase delay with each retry (exponential backoff)
                 if attempt > 0:
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
                     logger.info(f"Rate limit retry {attempt+1}/{max_retries}, waiting {delay:.2f} seconds")
@@ -504,11 +410,12 @@ CRITICAL: Maintain EXACT character consistency throughout all illustrations - sa
                     # Small delay even on first attempt to space out requests
                     time.sleep(base_delay)
                 
+                logger.info("Sending story image generation request to OpenAI API")
                 response = requests.post(
                     "https://api.openai.com/v1/images/generations",
                     headers=headers,
                     data=json.dumps(data),
-                    timeout=30
+                    timeout=60
                 )
                 
                 if response.status_code == 200:
@@ -529,33 +436,27 @@ CRITICAL: Maintain EXACT character consistency throughout all illustrations - sa
                             if img_response.status_code == 200:
                                 image_bytes = img_response.content
                             else:
-                                logger.error(f"Error downloading illustration: {img_response.status_code}")
+                                logger.error(f"Error downloading story image: {img_response.status_code}")
                                 continue  # Try again
                         
                         if image_bytes:
                             try:
                                 image = Image.open(BytesIO(image_bytes))
                                 
-                                # Add story text overlay if provided
-                                if story_text:
-                                    image = add_text_overlay(image, story_text)
+                                # Add story text overlay
+                                image_with_text = add_full_story_overlay(image, story_text)
                                 
                                 # Save to persistent directory with unique filename
-                                # FIX: Convert all variables to strings before hashing to avoid unhashable type errors
-                                # Ensure description and story_text are properly stringified
-                                desc_str = str(description) if description else ""
-                                story_str = str(story_text) if story_text else ""
                                 timestamp = str(time.time())
-                                
-                                # Create a unique hash from stringified values
-                                unique_hash = hash(desc_str + story_str + timestamp)
-                                filename = f"illustration_{unique_hash}.jpg"
+                                unique_hash = hash(str(scene_description) + timestamp)
+                                filename = f"story_image_{unique_hash}.jpg"
                                 image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
-                                image.save(image_path)
-                                logger.info(f"Successfully generated illustration: {image_path}")
+                                image_with_text.save(image_path, quality=95)  # High quality save
+                                
+                                logger.info(f"Successfully generated story image: {image_path}")
                                 return image_path
                             except Exception as save_err:
-                                logger.error(f"Error saving generated illustration: {save_err}")
+                                logger.error(f"Error saving generated story image: {save_err}")
                                 continue  # Try again
                         else:
                             logger.error("No image data found in the response")
@@ -580,7 +481,7 @@ CRITICAL: Maintain EXACT character consistency throughout all illustrations - sa
                     continue  # Try again after waiting
                 
                 else:
-                    logger.error(f"Error generating illustration: {response.status_code}")
+                    logger.error(f"Error generating story image: {response.status_code}")
                     logger.error(f"Response: {response.text}")
                     
                     # If it's not a rate limit error, don't retry
@@ -592,104 +493,114 @@ CRITICAL: Maintain EXACT character consistency throughout all illustrations - sa
                 time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
         
         # If we've exhausted all retries or encountered a non-retryable error
-        logger.error(f"Failed to generate illustration after {max_retries} attempts")
-        return None
+        logger.error(f"Failed to generate story image after {max_retries} attempts")
+        return _create_placeholder_image("Failed to generate story image. Please try again later.", error=True)
         
     except Exception as e:
-        logger.error(f"Error generating illustration: {str(e)}")
-        return None
+        logger.error(f"Error generating story image: {str(e)}")
+        return _create_placeholder_image(f"Error generating story image: {str(e)}", error=True)
 
-def add_text_overlay(image, text):
-    """Add text overlay to an illustration."""
+def add_full_story_overlay(image, story_text):
+    """Add full story text overlay to the image."""
     try:
-        logger.info("Adding text overlay to illustration")
+        logger.info("Adding full story text overlay")
         
         # Create a copy of the image to avoid modifying the original
         img_with_text = image.copy()
         draw = ImageDraw.Draw(img_with_text)
         
-        # Attempt to load a font, fallback to default if not found
-        try:
-            # Using a common font path, adjust if needed
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
-            small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
-        except IOError:
-            font = ImageFont.load_default()
-            small_font = ImageFont.load_default()
-        
-        # Create semi-transparent background for text
+        # Get image dimensions
         width, height = img_with_text.size
-        overlay = Image.new('RGBA', (width, int(height * 0.25)), (0, 0, 0, 180))
         
-        # Wrap text to fit the width
-        max_width = width - 40  # 20px padding on each side
-        wrapped_text = textwrap.fill(str(text), width=60)
-        
-        # If text is too long, truncate and add ellipsis
-        lines = wrapped_text.split('\n')
-        if len(lines) > 5:
-            wrapped_text = '\n'.join(lines[:4]) + '\n...'
+        # Attempt to load fonts, fallback to default if not found
+        try:
+            title_font_size = 48
+            body_font_size = 24
             
-        # Calculate text position (centered horizontally, at the bottom of the image)
-        text_bbox = draw.textbbox((0, 0), wrapped_text, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
+            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", title_font_size)
+            body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", body_font_size)
+        except IOError:
+            title_font = ImageFont.load_default()
+            body_font = ImageFont.load_default()
         
-        # Position the overlay at the bottom of the image
-        img_with_text.paste(overlay, (0, height - int(height * 0.25)), overlay)
+        # Extract title and body from story text
+        title = ""
+        body = story_text
         
-        # Draw the text on the overlay
-        position = ((width - text_width) // 2, height - int(height * 0.25) + 20)
-        draw.text(position, wrapped_text, fill=(255, 255, 255), font=font)
+        # Look for markdown title format
+        lines = story_text.split('\n')
+        for i, line in enumerate(lines):
+            if line.startswith('# '):
+                title = line.replace('# ', '')
+                body = '\n'.join(lines[i+1:])
+                break
         
-        logger.info("Successfully added text overlay to illustration")
-        return img_with_text
+        # If no markdown title found, try to extract first line as title
+        if not title and lines:
+            title = lines[0]
+            body = '\n'.join(lines[1:])
+        
+        # Clean up the story text - remove the scene description marker
+        body = re.sub(r'\[STORY_SCENE:.*?\]', '', body)
+        
+        # Create semi-transparent gradient overlay for the entire image
+        gradient = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        draw_gradient = ImageDraw.Draw(gradient)
+        
+        # Draw a gradient from transparent to semi-transparent black
+        for y in range(height):
+            # Calculate alpha based on position
+            # More transparent at the top, more opaque at the bottom
+            alpha = int(180 * (y / height))
+            draw_gradient.line([(0, y), (width, y)], fill=(0, 0, 0, alpha))
+        
+        # Apply the gradient overlay
+        img_with_text = Image.alpha_composite(img_with_text.convert('RGBA'), gradient)
+        draw = ImageDraw.Draw(img_with_text)
+        
+        # Draw title at the top
+        if title:
+            # Wrap title text
+            title_max_width = width - 100  # 50px padding on each side
+            wrapped_title = textwrap.fill(title, width=40)
+            
+            # Calculate title position (centered horizontally, at the top with padding)
+            title_bbox = draw.textbbox((0, 0), wrapped_title, font=title_font)
+            title_width = title_bbox[2] - title_bbox[0]
+            title_height = title_bbox[3] - title_bbox[1]
+            title_position = ((width - title_width) // 2, 30)
+            
+            # Draw title with subtle shadow for better readability
+            draw.text((title_position[0]+2, title_position[1]+2), wrapped_title, fill=(0, 0, 0, 200), font=title_font)
+            draw.text(title_position, wrapped_title, fill=(255, 255, 255), font=title_font)
+        
+        # Prepare body text
+        # Wrap body text
+        body_max_width = width - 100  # 50px padding on each side
+        wrapped_body = textwrap.fill(body, width=80)
+        
+        # Calculate body text position
+        body_y_position = height // 2  # Start in the middle of the image
+        
+        # Draw body text with scrollable effect
+        lines = wrapped_body.split('\n')
+        line_height = body_font_size + 8  # Add some line spacing
+        
+        # Limit the number of lines to fit in the image
+        max_lines = (height - body_y_position - 50) // line_height
+        if len(lines) > max_lines:
+            lines = lines[:max_lines-1] + ["... (Story continues)"]
+        
+        for i, line in enumerate(lines):
+            y_pos = body_y_position + (i * line_height)
+            # Draw text with subtle shadow for better readability
+            draw.text((52, y_pos+2), line, fill=(0, 0, 0, 200), font=body_font)
+            draw.text((50, y_pos), line, fill=(255, 255, 255), font=body_font)
+        
+        logger.info("Successfully added full story text overlay")
+        return img_with_text.convert('RGB')  # Convert back to RGB for saving as JPG
         
     except Exception as e:
-        logger.error(f"Error adding text overlay: {str(e)}")
+        logger.error(f"Error adding full story text overlay: {str(e)}")
         # Return the original image if overlay fails
         return image
-
-def generate_illustrations_with_text(story_text, api_key):
-    """Generate illustrations with corresponding story text overlays."""
-    try:
-        logger.info("Generating illustrations with text overlays")
-        
-        # Extract illustration descriptions and story segments
-        descriptions, story_segments = extract_illustration_descriptions(story_text)
-        
-        illustration_paths = []
-        
-        for i, description in enumerate(descriptions):
-            # Get the corresponding story segment for this illustration
-            story_segment = story_segments[i] if i < len(story_segments) else ""
-            
-            # Extract a relevant portion of text for the overlay (first paragraph or sentence)
-            overlay_text = ""
-            if story_segment:
-                # Try to get the first paragraph
-                paragraphs = story_segment.split('\n\n')
-                if paragraphs:
-                    first_para = paragraphs[0].strip()
-                    # If paragraph is too long, get just the first sentence
-                    if len(first_para) > 200:
-                        sentences = first_para.split('.')
-                        if sentences:
-                            overlay_text = sentences[0].strip() + "."
-                    else:
-                        overlay_text = first_para
-            
-            # Generate illustration with text overlay
-            illustration_path = generate_illustration(description, api_key, overlay_text)
-            
-            if illustration_path:
-                illustration_paths.append(illustration_path)
-                logger.info(f"Generated illustration {i+1}/{len(descriptions)} with text overlay")
-            else:
-                logger.error(f"Failed to generate illustration {i+1}/{len(descriptions)}")
-        
-        return illustration_paths
-        
-    except Exception as e:
-        logger.error(f"Error generating illustrations with text: {str(e)}")
-        return []
