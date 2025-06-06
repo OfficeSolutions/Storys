@@ -398,7 +398,7 @@ Create a beautiful, engaging scene that captures the essence of the story.
                     "prompt": enhanced_prompt,
                     "n": 1,
                     "quality": "high",  # Using high quality for the single story image
-                    "size": "1792x1024"  # Using a wider format for better text overlay
+                    "size": "1536x1024"  # Using a supported wide format for better text overlay
                 }
                 
                 # Add delay between requests to avoid rate limiting
