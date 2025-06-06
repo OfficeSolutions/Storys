@@ -397,7 +397,7 @@ Create a beautiful, engaging scene that captures the essence of the story.
                     "model": "gpt-image-1",
                     "prompt": enhanced_prompt,
                     "n": 1,
-                    "quality": "hd",  # Using high quality for the single story image
+                    "quality": "high",  # Using high quality for the single story image
                     "size": "1792x1024"  # Using a wider format for better text overlay
                 }
                 
