@@ -1,355 +1,267 @@
 import os
 import requests
 import json
-import tempfile
 import base64
+import re
 import time
 import random
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
 import logging
 import textwrap
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Create a persistent directory for storing images
+# Constants
 PERSISTENT_IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "images")
 os.makedirs(PERSISTENT_IMAGE_DIR, exist_ok=True)
-logger.info(f"Using persistent image directory: {PERSISTENT_IMAGE_DIR}")
 
-# Global variables to store child description and appearance details for consistent illustrations
+# Global variables to store character appearance details for consistency
 child_character_description = None
 child_appearance_details = {}
 
-def _create_placeholder_image(text, error=False):
-    """Helper function to create a placeholder image with text."""
-    try:
-        # Use persistent directory instead of temp directory
-        # Ensure text is converted to string before hashing
-        filename = f"placeholder_{hash(str(text))}.jpg"
-        placeholder_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
-        
-        img = Image.new("RGB", (1024, 1024), color=(240, 240, 240) if not error else (255, 200, 200))
-        d = ImageDraw.Draw(img)
-
-        # Attempt to load a font, fallback to default if not found
-        try:
-            # Using a common font path, adjust if needed
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
-        except IOError:
-            font = ImageFont.load_default()
-
-        # Wrap text
-        wrapped_text = textwrap.fill(str(text), width=40)
-
-        # Calculate text position (centered)
-        text_bbox = d.textbbox((0, 0), wrapped_text, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
-        position = ((1024 - text_width) / 2, (1024 - text_height) / 2)
-
-        # Draw the text
-        d.text(position, wrapped_text, fill=(0, 0, 0), font=font)
-        img.save(placeholder_path)
-        logger.info(f"Created placeholder image: {placeholder_path}")
-        return placeholder_path
-    except Exception as e:
-        logger.error(f"Failed to create placeholder image: {str(e)}")
-        # Return a path to a minimal fallback if even placeholder creation fails
-        return None # Or path to a static error image asset
-
-def generate_story(child_name, image_data, theme, age_range="4-6", generate_illustrations=False, rhyming=False):
-    """Generate a personalized story based on the child's name, image, and theme using OpenAI."""
+def extract_appearance_details(image_data, api_key):
+    """Extract appearance details from the child's image."""
     global child_character_description, child_appearance_details
     
+    if child_character_description and child_appearance_details:
+        logger.info("Using cached appearance details")
+        return child_character_description, child_appearance_details
+    
     try:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            logger.error("OPENAI_API_KEY environment variable not set")
-            raise ValueError("OPENAI_API_KEY environment variable not set")
-
-        if age_range == "2-4":
-            complexity = "extremely simple with very short sentences (3-5 words), basic everyday vocabulary (e.g., common nouns and verbs), and a very straightforward, linear plot with minimal characters. Focus on repetition and clear actions. Length should be around 300-500 words."
-            reading_level = "toddlers and preschoolers (2-4 years old)"
-        elif age_range == "4-6":
-            complexity = "simple and engaging, with clear, concise sentences (5-8 words), common vocabulary suitable for young children, and a straightforward plot. Focus on clear actions and a positive message. Length should be around 500-800 words."
-            reading_level = "kindergarteners (4-6 years old)"
-        elif age_range == "6-8":
-            complexity = "moderately complex with varied sentence structures, richer vocabulary, and a more developed plot. Length should be around 800-1200 words."
-            reading_level = "early elementary school children (6-8 years old)"
-        else:  # 8-10
-            complexity = "more complex with longer paragraphs, advanced vocabulary, and a multi-layered plot. Length should be around 1200-1500 words."
-            reading_level = "older elementary school children (8-10 years old)"
-
-        child_description = analyze_image(image_data, api_key)
-        logger.info(f"Child description: {child_description[:100]}...")
-        
-        # Store the child description globally for consistent illustrations
-        child_character_description = child_description
-        
-        # Extract and store specific appearance details for stronger consistency
-        extract_appearance_details(child_description)
-
-        rhyming_instruction = "The story should be written in rhyming verse, with a consistent rhythm and rhyme scheme appropriate for a bedtime story." if rhyming else ""
-        
-        # Modified to create a single scene description for the story image
-        illustration_instruction = "Include ONE vivid scene description that captures the essence of the story. Mark this with [STORY_SCENE: detailed description of the scene]. This scene should include the child character and represent the main theme or climax of the story." if generate_illustrations else ""
-
-        prompt = f"""
-        Create a personalized bedtime story for a child named {child_name}.
-        The story should be in the {theme} theme and should be appropriate for {reading_level}.
-        The story should be {complexity}
-        {rhyming_instruction}
-        Make the child the main character of the story. The child looks like this: {child_description}
-        Incorporate these visual details about the child throughout the story to make it more personalized.
-        The story should have a clear beginning, middle, and end, with a positive message or lesson.
-        {illustration_instruction}
-        Make the story engaging, imaginative, and appropriate for the age range.
-        """
-
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
-
+        
+        # Prepare the prompt for appearance extraction
+        prompt = """Analyze this child's image and describe their appearance in detail. 
+        Focus on these specific attributes:
+        1. Hair color (be specific, e.g., "light brown" not just "brown")
+        2. Hair style (e.g., "short curly", "long straight", "pigtails")
+        3. Eye color (be specific)
+        4. Skin tone (be specific)
+        5. Clothing (describe what they're wearing)
+        6. Any distinctive features (glasses, freckles, etc.)
+        
+        Format your response as a JSON object with these keys: 
+        hair_color, hair_style, eye_color, skin_tone, clothing, distinctive_features
+        
+        If you cannot determine any attribute, use "unknown" as the value.
+        """
+        
         data = {
-            "model": "gpt-4o",
+            "model": "gpt-4-vision-preview",
             "messages": [
-                {
-                    "role": "system",
-                    "content": f"You are a creative children's story writer specializing in stories for {reading_level}. Create engaging, age-appropriate stories that feature the child as the main character. Incorporate details from the child's appearance in the image. {rhyming_instruction}"
-                },
                 {
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_data}"
+                            }
+                        }
                     ]
                 }
             ],
-            "max_tokens": 4000
-        }
-
-        logger.info(f"Sending story generation request to OpenAI API")
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            data=json.dumps(data),
-            timeout=120
-        )
-
-        if response.status_code == 200:
-            response_data = response.json()
-            story = response_data["choices"][0]["message"]["content"]
-            logger.info(f"Successfully generated story of length {len(story)}")
-            return story
-        else:
-            logger.error(f"Error generating story: {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            raise Exception(f"Error generating story: {response.status_code}")
-
-    except Exception as e:
-        logger.error(f"Error generating story: {str(e)}")
-        # Fallback story generation logic remains the same...
-        if age_range == "2-4": story_length = "short"
-        elif age_range == "4-6": story_length = "medium-length"
-        elif age_range == "6-8": story_length = "longer"
-        else: story_length = "elaborate"
-        
-        # Modified to include a single scene description
-        scene_description = f"[STORY_SCENE: {child_name} standing in a magical {theme} landscape with glowing lights, surrounded by friendly creatures. The scene captures the wonder in {child_name}'s eyes as they discover the magic of this new world.]"
-        
-        fallback_story = f"""
-        # {child_name}'s {theme.title()} Adventure
-        
-        Once upon a time, there was a child named {child_name} who loved {theme} adventures.
-        One day, {child_name} discovered a magical door that led to a world of {theme}.
-        
-        In this world, {child_name} met friendly creatures who became their guides.
-        {child_name} embarked on a {story_length} journey through mountains, valleys, and mysterious forests.
-        
-        After many exciting adventures, {child_name} learned the importance of courage and friendship.
-        When {child_name} returned home, they couldn't wait to share their amazing story with everyone.
-        
-        {scene_description}
-        
-        The End.
-        """
-        return fallback_story
-
-def extract_appearance_details(description):
-    """Extract specific appearance details from the child description for stronger consistency."""
-    global child_appearance_details
-    
-    try:
-        logger.info("Extracting specific appearance details for consistency")
-        
-        # Reset appearance details
-        child_appearance_details = {
-            "hair_color": "unknown",
-            "hair_style": "unknown",
-            "eye_color": "unknown",
-            "skin_tone": "unknown",
-            "clothing": "unknown",
-            "distinctive_features": "unknown"
+            "max_tokens": 500
         }
         
-        # Extract hair color
-        hair_color_patterns = [
-            r"(blonde|blond|brown|black|red|auburn|ginger|gray|white) hair",
-            r"hair is (blonde|blond|brown|black|red|auburn|ginger|gray|white)",
-            r"(blonde|blond|brown|black|red|auburn|ginger|gray|white)-haired"
-        ]
-        
-        for pattern in hair_color_patterns:
-            import re
-            match = re.search(pattern, description.lower())
-            if match:
-                child_appearance_details["hair_color"] = match.group(1)
-                break
-        
-        # Extract hair style
-        hair_style_patterns = [
-            r"(curly|wavy|straight|short|long|medium-length|braided|ponytail|pigtails) hair",
-            r"hair is (curly|wavy|straight|short|long|medium-length|braided|in a ponytail|in pigtails)"
-        ]
-        
-        for pattern in hair_style_patterns:
-            match = re.search(pattern, description.lower())
-            if match:
-                child_appearance_details["hair_style"] = match.group(1)
-                break
-        
-        # Extract eye color
-        eye_color_patterns = [
-            r"(blue|green|brown|hazel|gray|amber) eyes",
-            r"eyes are (blue|green|brown|hazel|gray|amber)"
-        ]
-        
-        for pattern in eye_color_patterns:
-            match = re.search(pattern, description.lower())
-            if match:
-                child_appearance_details["eye_color"] = match.group(1)
-                break
-        
-        # Extract skin tone
-        skin_tone_patterns = [
-            r"(fair|light|pale|tan|medium|olive|brown|dark) skin",
-            r"skin is (fair|light|pale|tan|medium|olive|brown|dark)"
-        ]
-        
-        for pattern in skin_tone_patterns:
-            match = re.search(pattern, description.lower())
-            if match:
-                child_appearance_details["skin_tone"] = match.group(1)
-                break
-        
-        # Extract clothing (more complex, just look for clothing-related sentences)
-        clothing_patterns = [
-            r"wearing ([^\.]+)",
-            r"dressed in ([^\.]+)"
-        ]
-        
-        for pattern in clothing_patterns:
-            match = re.search(pattern, description.lower())
-            if match:
-                child_appearance_details["clothing"] = match.group(1)
-                break
-        
-        # Log the extracted details
-        logger.info(f"Extracted appearance details: {json.dumps(child_appearance_details)}")
-        
-    except Exception as e:
-        logger.error(f"Error extracting appearance details: {str(e)}")
-        # Keep default values if extraction fails
-
-def analyze_image(image_data, api_key):
-    """Analyze the image to extract details about the child."""
-    try:
-        logger.info("Analyzing uploaded image")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        data = {
-            "model": "gpt-4o",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are an assistant that analyzes images of children to provide detailed descriptions for story personalization. Focus on visual details like hair color, hair style, eye color, clothing, and any distinctive features. Be specific but respectful and appropriate."
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Please describe this child in detail for a personalized story. Include hair color, hair style, eye color, clothing colors, and any distinctive features. Be specific but appropriate."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
-                    ]
-                }
-            ]
-        }
         response = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers=headers,
             data=json.dumps(data),
             timeout=30
         )
+        
         if response.status_code == 200:
             response_data = response.json()
-            description = response_data["choices"][0]["message"]["content"]
-            logger.info("Successfully analyzed image")
-            return description
+            content = response_data["choices"][0]["message"]["content"]
+            
+            # Extract JSON from the response
+            json_match = re.search(r'({.*})', content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+                appearance = json.loads(json_str)
+                
+                # Create a detailed description
+                description_parts = []
+                
+                if appearance.get("hair_color", "unknown") != "unknown":
+                    description_parts.append(f"{appearance.get('hair_color')} hair")
+                
+                if appearance.get("hair_style", "unknown") != "unknown":
+                    description_parts.append(f"{appearance.get('hair_style')} hairstyle")
+                
+                if appearance.get("eye_color", "unknown") != "unknown":
+                    description_parts.append(f"{appearance.get('eye_color')} eyes")
+                
+                if appearance.get("skin_tone", "unknown") != "unknown":
+                    description_parts.append(f"{appearance.get('skin_tone')} skin tone")
+                
+                if appearance.get("clothing", "unknown") != "unknown":
+                    description_parts.append(f"wearing {appearance.get('clothing')}")
+                
+                if appearance.get("distinctive_features", "unknown") != "unknown" and appearance.get("distinctive_features") != "none":
+                    description_parts.append(f"with {appearance.get('distinctive_features')}")
+                
+                description = "a child with " + ", ".join(description_parts)
+                
+                # Cache the results
+                child_character_description = description
+                child_appearance_details = appearance
+                
+                logger.info(f"Extracted appearance details: {appearance}")
+                return description, appearance
+            else:
+                logger.warning("Could not extract JSON from appearance analysis response")
+                return "a young child", {"hair_color": "unknown", "hair_style": "unknown", "eye_color": "unknown", "skin_tone": "unknown", "clothing": "unknown", "distinctive_features": "unknown"}
         else:
-            logger.error(f"Error analyzing image: {response.status_code}")
+            logger.error(f"Error analyzing appearance: {response.status_code}")
             logger.error(f"Response: {response.text}")
-            return "a young child with a bright smile"
+            return "a young child", {"hair_color": "unknown", "hair_style": "unknown", "eye_color": "unknown", "skin_tone": "unknown", "clothing": "unknown", "distinctive_features": "unknown"}
+    
     except Exception as e:
-        logger.error(f"Error analyzing image: {str(e)}")
-        return "a young child with a bright smile"
+        logger.error(f"Error extracting appearance details: {str(e)}")
+        return "a young child", {"hair_color": "unknown", "hair_style": "unknown", "eye_color": "unknown", "skin_tone": "unknown", "clothing": "unknown", "distinctive_features": "unknown"}
 
-def extract_story_scene(story_text):
-    """Extract the story scene description from the story text."""
+def generate_story(child_name, image_data, theme, age_range, generate_illustrations=True, rhyming=False):
+    """Generate a personalized story based on the child's image and preferences."""
     try:
-        logger.info("Extracting story scene description")
-        scene_marker = story_text.split("[STORY_SCENE:")
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set")
         
-        if len(scene_marker) > 1:
-            # Split the marker into description and remaining text
-            parts = scene_marker[1].split("]", 1)
-            if len(parts) > 0:
-                description = parts[0].strip()
-                logger.info(f"Extracted story scene description: {description[:50]}...")
-                return description
+        # Extract appearance details from the image
+        character_desc, appearance_details = extract_appearance_details(image_data, api_key)
         
-        # If no scene marker found, create a generic description
-        logger.warning("No story scene marker found, using generic description")
-        return "A magical scene from the story with the child as the main character"
+        # Prepare the prompt
+        system_prompt = f"""You are a children's book author who creates personalized stories for young children.
+        Write a short, engaging story for a {age_range} year old child named {child_name}.
+        
+        The story should:
+        - Be about {theme}
+        - Feature {child_name} as the main character, described as: {character_desc}
+        - Be appropriate for a {age_range} year old
+        - Be 300-500 words long
+        - Have a clear beginning, middle, and end
+        - Include a positive message or lesson
+        - Use simple language appropriate for the age range
+        - Start with a title formatted as "# [Title]"
+        - Include ONE marker [STORY_SCENE: detailed visual description] at a point in the story that would make a great illustration
+        """
+        
+        if rhyming:
+            system_prompt += "- Use rhyming text throughout the story\n"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        data = {
+            "model": "gpt-4-turbo",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Please write a personalized story for {child_name} about {theme}."}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 1000
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            data=json.dumps(data),
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            story_text = response_data["choices"][0]["message"]["content"]
+            
+            logger.info(f"Generated story: {len(story_text)} characters")
+            
+            return story_text
+        else:
+            logger.error(f"Error generating story: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            return "Error generating story. Please try again."
+    
     except Exception as e:
-        logger.error(f"Error extracting story scene: {str(e)}")
-        return "A magical scene from the story with the child as the main character"
+        logger.error(f"Error generating story: {str(e)}")
+        return f"Error generating story: {str(e)}"
 
-def generate_story_image(story_text, api_key):
-    """Generate a single high-quality image for the entire story with text overlay."""
-    global child_character_description, child_appearance_details
+def _create_placeholder_image(message, error=False):
+    """Create a placeholder image with text."""
+    width, height = 800, 600
+    color = (200, 50, 50) if error else (50, 50, 200)
+    
+    img = Image.new('RGB', (width, height), color=color)
+    draw = ImageDraw.Draw(img)
     
     try:
-        logger.info("Generating single high-quality story image")
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
+    except IOError:
+        font = ImageFont.load_default()
+    
+    # Wrap text
+    lines = textwrap.wrap(message, width=40)
+    y_position = height // 2 - len(lines) * 15
+    
+    for line in lines:
+        line_width = draw.textlength(line, font=font)
+        position = ((width - line_width) // 2, y_position)
+        draw.text(position, line, font=font, fill=(255, 255, 255))
+        y_position += 30
+    
+    # Save to a temporary file
+    temp_path = os.path.join(PERSISTENT_IMAGE_DIR, f"placeholder_{int(time.time())}.jpg")
+    img.save(temp_path)
+    
+    return temp_path
+
+def generate_story_image(story_text, api_key):
+    """Generate a single high-quality image for the story with text overlay."""
+    try:
+        logger.info("Generating story image")
         
-        # Extract the scene description from the story
-        scene_description = extract_story_scene(story_text)
+        # Extract scene description from story text
+        scene_match = re.search(r'\[STORY_SCENE:(.*?)\]', story_text, re.DOTALL)
+        if scene_match:
+            scene_description = scene_match.group(1).strip()
+        else:
+            # If no scene marker found, extract a description from the story
+            logger.warning("No [STORY_SCENE] marker found, extracting description from story")
+            
+            # Get the middle part of the story for the scene
+            lines = story_text.split('\n')
+            content_lines = [line for line in lines if line.strip() and not line.startswith('#')]
+            if content_lines:
+                middle_index = len(content_lines) // 2
+                scene_description = content_lines[middle_index]
+            else:
+                scene_description = "A magical scene from a children's story"
         
-        # Implement exponential backoff for rate limiting
+        logger.info(f"Using scene description: {scene_description}")
+        
+        # Set up API request
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        # Retry parameters
         max_retries = 5
-        base_delay = 2  # Start with a 2-second delay
+        base_delay = 1  # seconds
         
+        # Try multiple times with exponential backoff
         for attempt in range(max_retries):
             try:
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}"
-                }
-                
                 # Use the global child description for consistency
                 character_desc = child_character_description or "a young child"
                 
@@ -441,19 +353,37 @@ Create a beautiful, engaging scene that captures the essence of the story.
                         
                         if image_bytes:
                             try:
+                                # Open the original image
                                 image = Image.open(BytesIO(image_bytes))
+                                logger.info(f"Successfully downloaded image: {image.format}, {image.size}, {image.mode}")
+                                
+                                # Save the original image for debugging
+                                timestamp = str(int(time.time()))
+                                original_filename = f"story_image_original_{timestamp}.jpg"
+                                original_path = os.path.join(PERSISTENT_IMAGE_DIR, original_filename)
+                                image.save(original_path, quality=95)
+                                logger.info(f"Saved original image to: {original_path}")
                                 
                                 # Add story text overlay
+                                logger.info("Adding text overlay to image")
                                 image_with_text = add_full_story_overlay(image, story_text)
                                 
-                                # Save to persistent directory with unique filename
-                                timestamp = str(time.time())
-                                unique_hash = hash(str(scene_description) + timestamp)
-                                filename = f"story_image_{unique_hash}.jpg"
+                                # Save to persistent directory with unique filename and timestamp to prevent caching
+                                desc_str = str(scene_description) if scene_description else ""
+                                story_str = str(story_text) if story_text else ""
+                                unique_hash = hash(desc_str + story_str + timestamp)
+                                filename = f"story_image_with_text_{timestamp}_{unique_hash}.jpg"
                                 image_path = os.path.join(PERSISTENT_IMAGE_DIR, filename)
-                                image_with_text.save(image_path, quality=95)  # High quality save
                                 
-                                logger.info(f"Successfully generated story image: {image_path}")
+                                # Ensure we're saving as RGB (not RGBA) for JPG format
+                                if image_with_text.mode == 'RGBA':
+                                    logger.info("Converting RGBA image to RGB for saving as JPG")
+                                    image_with_text = image_with_text.convert('RGB')
+                                
+                                # Save with high quality
+                                image_with_text.save(image_path, quality=95)
+                                logger.info(f"Successfully saved image with text overlay to: {image_path}")
+                                
                                 return image_path
                             except Exception as save_err:
                                 logger.error(f"Error saving generated story image: {save_err}")
@@ -507,10 +437,17 @@ def add_full_story_overlay(image, story_text):
         
         # Create a copy of the image to avoid modifying the original
         img_with_text = image.copy()
+        
+        # Ensure the image is in RGBA mode for alpha compositing
+        if img_with_text.mode != 'RGBA':
+            logger.info(f"Converting image from {img_with_text.mode} to RGBA for overlay")
+            img_with_text = img_with_text.convert('RGBA')
+        
         draw = ImageDraw.Draw(img_with_text)
         
         # Get image dimensions
         width, height = img_with_text.size
+        logger.info(f"Image dimensions: {width}x{height}")
         
         # Attempt to load fonts, fallback to default if not found
         try:
@@ -519,7 +456,9 @@ def add_full_story_overlay(image, story_text):
             
             title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", title_font_size)
             body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", body_font_size)
-        except IOError:
+            logger.info("Successfully loaded fonts")
+        except IOError as font_err:
+            logger.error(f"Error loading fonts: {font_err}, using default")
             title_font = ImageFont.load_default()
             body_font = ImageFont.load_default()
         
@@ -540,10 +479,14 @@ def add_full_story_overlay(image, story_text):
             title = lines[0]
             body = '\n'.join(lines[1:])
         
+        logger.info(f"Extracted title: '{title}'")
+        logger.info(f"Body text length: {len(body)} characters")
+        
         # Clean up the story text - remove the scene description marker
         body = re.sub(r'\[STORY_SCENE:.*?\]', '', body)
         
         # Create semi-transparent gradient overlay for the entire image
+        logger.info("Creating gradient overlay")
         gradient = Image.new('RGBA', (width, height), (0, 0, 0, 0))
         draw_gradient = ImageDraw.Draw(gradient)
         
@@ -555,11 +498,13 @@ def add_full_story_overlay(image, story_text):
             draw_gradient.line([(0, y), (width, y)], fill=(0, 0, 0, alpha))
         
         # Apply the gradient overlay
-        img_with_text = Image.alpha_composite(img_with_text.convert('RGBA'), gradient)
+        logger.info("Applying gradient overlay")
+        img_with_text = Image.alpha_composite(img_with_text, gradient)
         draw = ImageDraw.Draw(img_with_text)
         
         # Draw title at the top
         if title:
+            logger.info(f"Drawing title: '{title}'")
             # Wrap title text
             title_max_width = width - 100  # 50px padding on each side
             wrapped_title = textwrap.fill(title, width=40)
@@ -570,11 +515,14 @@ def add_full_story_overlay(image, story_text):
             title_height = title_bbox[3] - title_bbox[1]
             title_position = ((width - title_width) // 2, 30)
             
+            logger.info(f"Title position: {title_position}, width: {title_width}, height: {title_height}")
+            
             # Draw title with subtle shadow for better readability
             draw.text((title_position[0]+2, title_position[1]+2), wrapped_title, fill=(0, 0, 0, 200), font=title_font)
             draw.text(title_position, wrapped_title, fill=(255, 255, 255), font=title_font)
         
         # Prepare body text
+        logger.info("Drawing body text")
         # Wrap body text
         body_max_width = width - 100  # 50px padding on each side
         wrapped_body = textwrap.fill(body, width=80)
@@ -591,6 +539,8 @@ def add_full_story_overlay(image, story_text):
         if len(lines) > max_lines:
             lines = lines[:max_lines-1] + ["... (Story continues)"]
         
+        logger.info(f"Drawing {len(lines)} lines of body text starting at y={body_y_position}")
+        
         for i, line in enumerate(lines):
             y_pos = body_y_position + (i * line_height)
             # Draw text with subtle shadow for better readability
@@ -598,7 +548,14 @@ def add_full_story_overlay(image, story_text):
             draw.text((50, y_pos), line, fill=(255, 255, 255), font=body_font)
         
         logger.info("Successfully added full story text overlay")
-        return img_with_text.convert('RGB')  # Convert back to RGB for saving as JPG
+        
+        # Save a debug copy of the overlay image
+        debug_path = os.path.join(PERSISTENT_IMAGE_DIR, f"debug_overlay_{int(time.time())}.jpg")
+        img_with_text_rgb = img_with_text.convert('RGB')
+        img_with_text_rgb.save(debug_path, quality=95)
+        logger.info(f"Saved debug overlay image to: {debug_path}")
+        
+        return img_with_text
         
     except Exception as e:
         logger.error(f"Error adding full story text overlay: {str(e)}")
